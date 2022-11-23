@@ -4,10 +4,10 @@ The purpose of the code in this repository is both to distinguish between Conhos
 The source files are transcriptions of pretty much the same core code in different programming languages.  
 <br>
 ### **Minimum requirements to compile/run the code:**  
-| \*.c | C99 |
-| \*.cpp | C++20 |
-| \*.cs | .NET Framework 4.5 |
-| \*.ps1 | Windows PowerShell 2 |
+\*.c - C99  
+\*.cpp - C++20  
+\*.cs - .NET Framework 4.5  
+\*.ps1 - Windows PowerShell 2  
 <br>
 ### **Background:**  
 A few years ago Microsoft began to develop a new terminal application - Windows Terminal. The installation is available for Windows 10, and Windows 11 already ships with it. By an update in October '22 Microsoft turned it into the default terminal app on Windows 11.  
