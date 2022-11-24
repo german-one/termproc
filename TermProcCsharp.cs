@@ -280,9 +280,11 @@ namespace TerminalProcess
 
   internal class Program
   {
+#if (!DEBUG && CODE_ANALYSIS)
 #pragma warning disable IDE0079
     [SuppressMessage("Microsoft.Globalization", "CA1303:DoNotPassLiteralsAsLocalizedParameters")] // WriteLine()
 #pragma warning restore IDE0079
+#endif
     private static int Main()
     {
       try
