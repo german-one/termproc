@@ -5,6 +5,7 @@ The source files are transcriptions of pretty much the same core code in differe
 <br>
 ### **Minimum requirements to compile/run the code:**  
 Windows 10  
+\*.bat - Windows PowerShell 2  
 \*.c - C99  
 \*.cpp - C++20  
 \*.cs - .NET Framework 4.5  
