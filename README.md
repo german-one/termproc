@@ -4,6 +4,7 @@ The purpose of the code in this repository is both to distinguish between Conhos
 The source files are transcriptions of pretty much the same core code in different programming languages.  
 <br>
 ### **Minimum requirements to compile/run the code:**  
+Windows 10  
 \*.c - C99  
 \*.cpp - C++20  
 \*.cs - .NET Framework 4.5  

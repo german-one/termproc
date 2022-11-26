@@ -39,18 +39,16 @@ namespace TerminalProcess
     {
       [DllImport("kernel32.dll")]
       internal static extern int CloseHandle(IntPtr Hndl);
+      [DllImport("kernelbase.dll")]
+      internal static extern int CompareObjectHandles(IntPtr hFirst, IntPtr hSecond);
       [DllImport("kernel32.dll")]
       internal static extern int DuplicateHandle(IntPtr SrcProcHndl, IntPtr SrcHndl, IntPtr TrgtProcHndl, out IntPtr TrgtHndl, int Acc, int Inherit, int Opts);
       [DllImport("kernel32.dll")]
       internal static extern IntPtr GetConsoleWindow();
       [DllImport("kernel32.dll")]
       internal static extern IntPtr GetCurrentProcess();
-      [DllImport("kernel32.dll")]
-      internal static extern uint GetProcessId(IntPtr Proc);
       [DllImport("user32.dll")]
       internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint procId);
-      [DllImport("ntdll.dll")]
-      internal static extern int NtQueryObject(IntPtr ObjHandle, int ObjInfClass, IntPtr ObjInf, int ObjInfLen, IntPtr RetLen);
       [DllImport("ntdll.dll")]
       internal static extern int NtQuerySystemInformation(int SysInfClass, IntPtr SysInf, int SysInfLen, out int RetLen);
       [DllImport("kernel32.dll")]
@@ -120,16 +118,6 @@ namespace TerminalProcess
       }
     }
 
-    // UNICODE_STRING structure, https://learn.microsoft.com/en-us/windows/win32/api/subauth/ns-subauth-unicode_string
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private readonly struct UnicodeString
-    {
-      internal readonly ushort Len;
-      internal readonly ushort MaxLen;
-      [MarshalAs(UnmanagedType.LPWStr)]
-      internal readonly string Buf;
-    }
-
     // undocumented SYSTEM_HANDLE structure, SYSTEM_HANDLE_TABLE_ENTRY_INFO might be the actual name
     [StructLayout(LayoutKind.Sequential)]
     private readonly struct SystemHandle
@@ -148,39 +136,42 @@ namespace TerminalProcess
     private static uint FindWTCallback(uint shellPid, uint termPid)
     {
       const int PROCESS_DUP_HANDLE = 0x0040, // access right to duplicate handles
-                PROCESS_QUERY_INFORMATION = 0x0400, // access right to retrieve certain process information
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000, // access right to retrieve certain process information
                 STATUS_INFO_LENGTH_MISMATCH = -1073741820, // NTSTATUS returned if we still didn't allocate enough memory
-                SystemHandleInformation = 16, // one of the SYSTEM_INFORMATION_CLASS values
-                ObjectTypeInformation = 2; // one of the OBJECT_INFORMATION_CLASS values
+                SystemHandleInformation = 16; // one of the SYSTEM_INFORMATION_CLASS values
       int status, // retrieves the NTSTATUS return value
           infSize = 0x10000; // initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
-                             // open a handle to the WindowsTerminal process, granting permissions to duplicate handles
+      // open a handle to the WindowsTerminal process, granting permissions to duplicate handles
       using (SafeRes sHTerm = new SafeRes(NativeMethods.OpenProcess(PROCESS_DUP_HANDLE, 0, termPid), SafeRes.ResType.Handle))
       {
         if (sHTerm.IsInvalid)
         {
           return 0;
         }
-
-        // allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
-        IntPtr pSysHndlInf = Marshal.AllocHGlobal(infSize);
-        // try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
-        while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out int len)) == STATUS_INFO_LENGTH_MISMATCH)
+        //# open a handle to the Shell process
+        using (SafeRes sHShell = new SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, shellPid), SafeRes.ResType.Handle))
         {
-          Marshal.FreeHGlobal(pSysHndlInf);
-          pSysHndlInf = Marshal.AllocHGlobal(infSize = len);
-        }
-
-        using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer))
-        {
-          if (status < 0)
+          if (sHShell.IsInvalid)
           {
             return 0;
           }
 
-          // allocate reusable memory for a PUBLIC_OBJECT_TYPE_INFORMATION object
-          using (SafeRes sPTypeInfo = new SafeRes(Marshal.AllocHGlobal(0x1000), SafeRes.ResType.MemoryPointer))
+          // allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
+          IntPtr pSysHndlInf = Marshal.AllocHGlobal(infSize);
+          // try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
+          while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out int len)) == STATUS_INFO_LENGTH_MISMATCH)
           {
+            Marshal.FreeHGlobal(pSysHndlInf);
+            pSysHndlInf = Marshal.AllocHGlobal(infSize = len);
+          }
+
+          using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer))
+          {
+            if (status < 0)
+            {
+              return 0;
+            }
+
             uint pid = 0;
             IntPtr hCur = NativeMethods.GetCurrentProcess();
             int sysHndlSize = Marshal.SizeOf(typeof(SystemHandle));
@@ -194,7 +185,7 @@ namespace TerminalProcess
               // if duplicating its Handle member fails, continue with the next SYSTEM_HANDLE object
               // the duplicated handle is necessary to get information about the object (e.g. the process) it points to
               if (sysHndl.ProcId != termPid ||
-                  NativeMethods.DuplicateHandle(sHTerm.Raw, (IntPtr)sysHndl.Handle, hCur, out IntPtr hDup, PROCESS_QUERY_INFORMATION, 0, 0) == 0)
+                  NativeMethods.DuplicateHandle(sHTerm.Raw, (IntPtr)sysHndl.Handle, hCur, out IntPtr hDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) == 0)
               {
                 continue;
               }
@@ -202,16 +193,9 @@ namespace TerminalProcess
               // at this point duplicating succeeded and thus, sHDup is valid
               using (SafeRes sHDup = new SafeRes(hDup, SafeRes.ResType.Handle))
               {
-                // get the belonging PUBLIC_OBJECT_TYPE_INFORMATION object
-                // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-__public_object_type_information
-                // (its first member is a UNICODE_STRING object having the same address; thus, we can entirely skip both the
-                // declaration of the PUBLIC_OBJECT_TYPE_INFORMATION structure and accessing its first member to get the type name)
-                // check the type name to determine whether we have a process object
-                // if so, get its PID and compare it with the PID of the Shell process
-                // if they are equal, we are going to step out of the loop and return the PID of the WindowsTerminal process
-                if (NativeMethods.NtQueryObject(sHDup.Raw, ObjectTypeInformation, sPTypeInfo.Raw, 0x1000, IntPtr.Zero) >= 0 &&
-                    ((UnicodeString)Marshal.PtrToStructure(sPTypeInfo.Raw, typeof(UnicodeString))).Buf == "Process" && // luckily Buf seems to be always null-terminated here
-                    NativeMethods.GetProcessId(sHDup.Raw) == shellPid)
+                //# compare the duplicated handle with the handle of our shell process
+                //# if they point to the same kernel object, we are going to step out of the loop and return the PID of the WindowsTerminal process
+                if (NativeMethods.CompareObjectHandles(sHDup.Raw, sHShell.Raw) != 0)
                 {
                   pid = termPid;
                   break;
@@ -280,7 +264,7 @@ namespace TerminalProcess
 
   internal class Program
   {
-#if (!DEBUG && CODE_ANALYSIS)
+#if !DEBUG && CODE_ANALYSIS
 #pragma warning disable IDE0079
     [SuppressMessage("Microsoft.Globalization", "CA1303:DoNotPassLiteralsAsLocalizedParameters")] // WriteLine()
 #pragma warning restore IDE0079

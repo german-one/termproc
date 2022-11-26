@@ -26,7 +26,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #  pragma GCC diagnostic ignored "-Wreserved-macro-identifier"
 #endif
 #undef _WIN32_WINNT
-#define _WIN32_WINNT 0x0601
+#define _WIN32_WINNT 0x0A00
 #if defined(NDEBUG) && defined(__clang__)
 #  pragma GCC diagnostic pop
 #endif
@@ -134,26 +134,28 @@ typedef struct
 } SYSTEM_HANDLE, *PSYSTEM_HANDLE;
 
 typedef NTSTATUS(__stdcall *NtQuerySystemInformation_t)(int SysInfClass, PVOID SysInf, DWORD SysInfLen, PDWORD RetLen);
-typedef NTSTATUS(__stdcall *NtQueryObject_t)(HANDLE ObjHandle, int ObjInfClass, PVOID ObjInf, DWORD ObjInfLen, PDWORD RetLen);
+typedef BOOL(__stdcall *CompareObjectHandles_t)(HANDLE hFirst, HANDLE hSecond);
 
-static BOOL FnDynLoad(NtQuerySystemInformation_t *const pNtQuerySystemInformation, NtQueryObject_t *const pNtQueryObject)
+static BOOL FnDynLoad(NtQuerySystemInformation_t *const pNtQuerySystemInformation, CompareObjectHandles_t *const pCompareObjectHandles)
 {
   static NtQuerySystemInformation_t NtQuerySystemInformation;
-  static NtQueryObject_t NtQueryObject;
+  static CompareObjectHandles_t CompareObjectHandles;
 
-  if (!NtQuerySystemInformation || !NtQueryObject)
+  if (!NtQuerySystemInformation || !CompareObjectHandles)
   {
-    const HMODULE hModule = GetModuleHandleA("ntdll.dll");
-    if (!hModule)
+    HMODULE hModule = GetModuleHandleA("ntdll.dll");
+    if (!hModule ||
+        !(NtQuerySystemInformation = (NtQuerySystemInformation_t)GetProcAddress(hModule, "NtQuerySystemInformation")))
       return FALSE;
 
-    if (!(NtQuerySystemInformation = (NtQuerySystemInformation_t)GetProcAddress(hModule, "NtQuerySystemInformation")) ||
-        !(NtQueryObject = (NtQueryObject_t)GetProcAddress(hModule, "NtQueryObject")))
+    hModule = GetModuleHandleA("kernelbase.dll");
+    if (!hModule ||
+        !(CompareObjectHandles = (CompareObjectHandles_t)GetProcAddress(hModule, "CompareObjectHandles")))
       return FALSE;
   }
 
   *pNtQuerySystemInformation = NtQuerySystemInformation;
-  *pNtQueryObject = NtQueryObject;
+  *pCompareObjectHandles = CompareObjectHandles;
   return TRUE;
 }
 
@@ -164,24 +166,30 @@ static DWORD FindWTCallback(const DWORD shellPid, const DWORD termPid)
 {
   static const NTSTATUS STATUS_INFO_LENGTH_MISMATCH = (NTSTATUS)0xc0000004; // NTSTATUS returned if we still didn't allocate enough memory
   static const int SystemHandleInformation = 16; // one of the SYSTEM_INFORMATION_CLASS values
-  static const int ObjectTypeInformation = 2; // one of the OBJECT_INFORMATION_CLASS values
-  static const DWORD typeInfoSize = 0x1000;
 
   NtQuerySystemInformation_t NtQuerySystemInformation;
-  NtQueryObject_t NtQueryObject;
-  if (!FnDynLoad(&NtQuerySystemInformation, &NtQueryObject))
+  CompareObjectHandles_t CompareObjectHandles;
+  if (!FnDynLoad(&NtQuerySystemInformation, &CompareObjectHandles))
     return 0;
 
-  const HANDLE hProc = OpenProcess(PROCESS_DUP_HANDLE, FALSE, termPid);
-  if (!hProc)
+  const HANDLE hTerm = OpenProcess(PROCESS_DUP_HANDLE, FALSE, termPid);
+  if (!hTerm)
     return 0;
+
+  const HANDLE hShell = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, shellPid);
+  if (!hShell)
+  {
+    CloseHandle(hTerm);
+    return 0;
+  }
 
   // allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
   DWORD infSize = 0x10000;
   PBYTE pSysHndlInf = LocalAlloc(LMEM_FIXED, infSize);
   if (!pSysHndlInf)
   {
-    CloseHandle(hProc);
+    CloseHandle(hShell);
+    CloseHandle(hTerm);
     return 0;
   }
 
@@ -194,18 +202,14 @@ static DWORD FindWTCallback(const DWORD shellPid, const DWORD termPid)
     pSysHndlInf = LocalAlloc(LMEM_FIXED, infSize = len);
     if (!pSysHndlInf)
     {
-      CloseHandle(hProc);
+      CloseHandle(hShell);
+      CloseHandle(hTerm);
       return 0;
     }
   }
 
   DWORD pid = 0;
   if (!NT_SUCCESS(status))
-    goto finally;
-
-  // allocate reusable memory for a PUBLIC_OBJECT_TYPE_INFORMATION object
-  const PUNICODE_STRING pTypeInfo = LocalAlloc(LMEM_FIXED, typeInfoSize);
-  if (!pTypeInfo)
     goto finally;
 
   // iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
@@ -219,30 +223,22 @@ static DWORD FindWTCallback(const DWORD shellPid, const DWORD termPid)
     // if duplicating its Handle member fails, continue with the next SYSTEM_HANDLE object
     // the duplicated handle is necessary to get information about the object (e.g. the process) it points to
     if (pSysHndl->ProcId != termPid ||
-        !DuplicateHandle(hProc, (HANDLE)(UINT_PTR)pSysHndl->Handle, GetCurrentProcess(), &hDup, PROCESS_QUERY_INFORMATION, FALSE, 0))
+        !DuplicateHandle(hTerm, (HANDLE)(UINT_PTR)pSysHndl->Handle, GetCurrentProcess(), &hDup, PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0))
       continue;
 
     // at this point duplicating succeeded and thus, hDup is valid
-    // get the belonging PUBLIC_OBJECT_TYPE_INFORMATION object
-    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-__public_object_type_information
-    // (its first member is a UNICODE_STRING object having the same address; thus, we can entirely skip both the
-    // declaration of the PUBLIC_OBJECT_TYPE_INFORMATION structure and accessing its first member to get the type name)
-    // check the type name to determine whether we have a process object
-    // if so, get its PID and compare it with the PID of the Shell process
-    // if they are equal, we are going to step out of the loop and return the PID of the WindowsTerminal process
-    if (NT_SUCCESS(NtQueryObject(hDup, ObjectTypeInformation, pTypeInfo, typeInfoSize, NULL)) &&
-        lstrcmpW(pTypeInfo->Buffer, L"Process") == 0 &&
-        GetProcessId(hDup) == shellPid)
+    // compare the duplicated handle with the handle of our shell process
+    // if they point to the same kernel object, we are going to step out of the loop and return the PID of the WindowsTerminal process
+    if (CompareObjectHandles(hDup, hShell))
       pid = termPid;
 
     CloseHandle(hDup);
   }
 
-  LocalFree(pTypeInfo);
-
 finally:
   LocalFree(pSysHndlInf);
-  CloseHandle(hProc);
+  CloseHandle(hShell);
+  CloseHandle(hTerm);
   return pid;
 }
 
@@ -307,15 +303,15 @@ wchar_t *GetTermBaseName(const DWORD termPid)
   if (!termPid)
     return baseBuf;
 
-  const HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid);
-  if (!hProc)
+  const HANDLE hTerm = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid);
+  if (!hTerm)
     return baseBuf;
 
   wchar_t nameBuf[1024] = { 0 };
-  if (GetProcessImageFileNameW(hProc, nameBuf, 1024))
+  if (GetProcessImageFileNameW(hTerm, nameBuf, 1024))
     _wsplitpath_s(nameBuf, NULL, 0, NULL, 0, baseBuf, MAX_PATH, NULL, 0);
 
-  CloseHandle(hProc);
+  CloseHandle(hTerm);
   return baseBuf;
 }
 

@@ -26,7 +26,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #  pragma GCC diagnostic ignored "-Wreserved-macro-identifier"
 #endif
 #undef _WIN32_WINNT
-#define _WIN32_WINNT 0x0601
+#define _WIN32_WINNT 0x0A00
 #if defined(NDEBUG) && defined(__clang__)
 #  pragma GCC diagnostic pop
 #endif
@@ -215,51 +215,47 @@ namespace termproc::termpid
 
     class FnDynLoad
     {
-      const HMODULE _hModule{};
-
       template<typename fnptrT>
-      constexpr auto GetFunc(const char *const name) noexcept
+      constexpr auto GetFunc(const char *const libName, const char *const fnName) noexcept
       {
-        return _hModule ? reinterpret_cast<fnptrT>(::GetProcAddress(_hModule, name)) : fnptrT{};
+        const HMODULE hModule{ ::GetModuleHandleA(libName) };
+        return hModule ? reinterpret_cast<fnptrT>(::GetProcAddress(hModule, fnName)) : fnptrT{};
       }
 
     public:
       using NtQuerySystemInformation_t = NTSTATUS(__stdcall *)(int SysInfClass, PVOID SysInf, DWORD SysInfLen, PDWORD RetLen);
-      using NtQueryObject_t = NTSTATUS(__stdcall *)(HANDLE ObjHandle, int ObjInfClass, PVOID ObjInf, DWORD ObjInfLen, PDWORD RetLen);
+      using CompareObjectHandles_t = BOOL(__stdcall *)(HANDLE hFirst, HANDLE hSecond);
 
       const NtQuerySystemInformation_t NtQuerySystemInformation{};
-      const NtQueryObject_t NtQueryObject{};
+      const CompareObjectHandles_t CompareObjectHandles{};
 
       FnDynLoad() noexcept :
-        _hModule{ ::GetModuleHandleA("ntdll.dll") },
-        NtQuerySystemInformation{ GetFunc<NtQuerySystemInformation_t>("NtQuerySystemInformation") },
-        NtQueryObject{ GetFunc<NtQueryObject_t>("NtQueryObject") }
+        NtQuerySystemInformation{ GetFunc<NtQuerySystemInformation_t>("ntdll.dll", "NtQuerySystemInformation") },
+        CompareObjectHandles{ GetFunc<CompareObjectHandles_t>("kernelbase.dll", "CompareObjectHandles") }
       {
       }
 
       constexpr operator bool() const noexcept
       {
-        return NtQuerySystemInformation && NtQueryObject;
+        return NtQuerySystemInformation && CompareObjectHandles;
       }
     };
 
     // Enumerate the opened handles in the WindowsTerminal.exe process specified by the process ID passed to termPid.
     // Return termPid if one of the process handles points to the Shell process specified by the process ID passed to shellPid.
     // Return 0 if the Shell process is not found.
-    static DWORD FindWTCallback(const DWORD shellPid, const DWORD termPid)
+    static DWORD FindWTCallback(const DWORD shellPid, const DWORD termPid) noexcept
     {
-      static constexpr std::wstring_view procHndlTypeName{ L"Process" };
       static constexpr auto STATUS_INFO_LENGTH_MISMATCH{ static_cast<NTSTATUS>(0xc0000004) }; // NTSTATUS returned if we still didn't allocate enough memory
       static constexpr auto SystemHandleInformation{ 16 }; // one of the SYSTEM_INFORMATION_CLASS values
-      static constexpr auto ObjectTypeInformation{ 2 }; // one of the OBJECT_INFORMATION_CLASS values
-      static constexpr DWORD typeInfoSize{ 0x1000 };
 
       static const FnDynLoad fns{};
       if (!fns)
         return {};
 
-      const auto sHProc{ saferes::MakeHandle(::OpenProcess(PROCESS_DUP_HANDLE, FALSE, termPid)) };
-      if (saferes::IsInvalidHandle(sHProc))
+      const auto sHTerm{ saferes::MakeHandle(::OpenProcess(PROCESS_DUP_HANDLE, FALSE, termPid)) };
+      const auto sHShell{ saferes::MakeHandle(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, shellPid)) };
+      if (saferes::IsInvalidHandle(sHTerm) || saferes::IsInvalidHandle(sHShell))
         return {};
 
       // allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
@@ -281,8 +277,6 @@ namespace termproc::termpid
       if (!NT_SUCCESS(status))
         return {};
 
-      // allocate reusable memory for a PUBLIC_OBJECT_TYPE_INFORMATION object
-      std::array<BYTE, typeInfoSize> bufTypeInfo{};
       // iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
       // the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
       for (const auto &sysHandle :
@@ -293,21 +287,14 @@ namespace termproc::termpid
         // if duplicating its Handle member fails, continue with the next SYSTEM_HANDLE object
         // the duplicated handle is necessary to get information about the object (e.g. the process) it points to
         if (sysHandle.ProcId != termPid ||
-            !::DuplicateHandle(sHProc.get(), reinterpret_cast<HANDLE>(sysHandle.Handle), ::GetCurrentProcess(), &hDup, PROCESS_QUERY_INFORMATION, FALSE, 0))
+            !::DuplicateHandle(sHTerm.get(), reinterpret_cast<HANDLE>(sysHandle.Handle), ::GetCurrentProcess(), &hDup, PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0))
           continue;
 
         // at this point duplicating succeeded and thus, sHDup is valid
         const auto sHDup{ saferes::MakeHandle(hDup) };
-        // get the belonging PUBLIC_OBJECT_TYPE_INFORMATION object
-        // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-__public_object_type_information
-        // (its first member is a UNICODE_STRING object having the same address; thus, we can entirely skip both the
-        // declaration of the PUBLIC_OBJECT_TYPE_INFORMATION structure and accessing its first member to get the type name)
-        // check the type name to determine whether we have a process object
-        // if so, get its PID and compare it with the PID of the Shell process
-        // if they are equal, we are going to step out of the loop and return the PID of the WindowsTerminal process
-        if (NT_SUCCESS(fns.NtQueryObject(sHDup.get(), ObjectTypeInformation, bufTypeInfo.data(), typeInfoSize, nullptr)) &&
-            procHndlTypeName.compare((reinterpret_cast<PUNICODE_STRING>(bufTypeInfo.data()))->Buffer) == 0 &&
-            ::GetProcessId(sHDup.get()) == shellPid)
+        // compare the duplicated handle with the handle of our shell process
+        // if they point to the same kernel object, we are going to step out of the loop and return the PID of the WindowsTerminal process
+        if (fns.CompareObjectHandles(sHDup.get(), sHShell.get()))
           return termPid;
       }
 
@@ -373,12 +360,12 @@ std::wstring termproc::termname::GetTermBaseName(const DWORD termPid)
   if (!termPid)
     return {};
 
-  const auto sHProc{ saferes::MakeHandle(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid)) };
-  if (saferes::IsInvalidHandle(sHProc))
+  const auto sHTerm{ saferes::MakeHandle(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid)) };
+  if (saferes::IsInvalidHandle(sHTerm))
     return {};
 
   std::array<wchar_t, 1024> nameBuf{};
-  if (!::GetProcessImageFileNameW(sHProc.get(), nameBuf.data(), static_cast<DWORD>(nameBuf.size())))
+  if (!::GetProcessImageFileNameW(sHTerm.get(), nameBuf.data(), static_cast<DWORD>(nameBuf.size())))
     return {};
 
   return std::filesystem::path{ nameBuf.data() }.stem().wstring();
