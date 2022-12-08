@@ -17,7 +17,7 @@ The source files are transcriptions of pretty much the same core code in differe
 <br>
 
 ### **Background:**  
-A few years ago Microsoft began to develop a new terminal application - Windows Terminal. The installation is available for Windows 10, and Windows 11 already ships with it. By an update in October '22 Microsoft turned it into the default terminal app on Windows 11.  
+A few years ago Microsoft began to develop a new terminal application - [Windows Terminal](https://github.com/microsoft/terminal). The installation is available for Windows 10, and Windows 11 already ships with it. By an update in October '22 Microsoft turned it into the default terminal app on Windows 11.  
 As of now, Windows Terminal coexists with the good old Conhost. Users are able to choose which is taken as their default terminal app.
 
 In the past, it has been easy to figure out which terminal process is connected to the shell/console application. Behind the scenes it was always Conhost and thus, Microsoft made the Windows API reporting the process which spawned the conhost process as the terminal process, and reporting the window of the shell application as the console window. While all this is technically incorrect, it is quite comfortable at the same time.  
