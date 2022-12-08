@@ -12,6 +12,7 @@ The source files are transcriptions of pretty much the same core code in differe
 | `*.cpp` | *C++20* |
 | `*.cs` | *.NET Framework 4.5* |
 | `*.ps1` | *Windows PowerShell 2* |
+| `*.vb` | *.NET Framework 4.5* |
 
 <br>
 
