@@ -142,7 +142,6 @@ Namespace TerminalProcess
             SystemHandleInformation = 16 ' one of the SYSTEM_INFORMATION_CLASS values
       Dim status As Integer, ' retrieves the NTSTATUS return value
           infSize = &H10000 ' initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
-      Dim len As Integer = Nothing, hDup As IntPtr = Nothing
       ' open a handle to the WindowsTerminal process, granting permissions to duplicate handles
       Using sHTerm As New SafeRes(NativeMethods.OpenProcess(PROCESS_DUP_HANDLE, 0, termPid), SafeRes.ResType.Handle)
         If sHTerm.IsInvalid Then Return 0
@@ -151,7 +150,7 @@ Namespace TerminalProcess
           If sHShell.IsInvalid Then Return 0
 
           ' allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
-          Dim pSysHndlInf = Marshal.AllocHGlobal(infSize)
+          Dim pSysHndlInf = Marshal.AllocHGlobal(infSize), len = 0
           Do ' try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
             status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, len)
             If status <> STATUS_INFO_LENGTH_MISMATCH Then Exit Do
@@ -164,17 +163,18 @@ Namespace TerminalProcess
             If status < 0 Then Return 0
 
             Dim pid As UInteger = 0
-            Dim hCur As IntPtr = NativeMethods.GetCurrentProcess()
+            Dim hCur = NativeMethods.GetCurrentProcess()
             Dim sysHndlSize = Marshal.SizeOf(GetType(SystemHandle))
             ' iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
             ' the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
             Dim pSysHndl = sPSysHndlInf.Raw + IntPtr.Size, pEnd = pSysHndl + (Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize)
             While pSysHndl <> pEnd
               ' get one SYSTEM_HANDLE at a time
-              Dim sysHndl As SystemHandle = DirectCast(Marshal.PtrToStructure(pSysHndl, GetType(SystemHandle)), SystemHandle)
+              Dim sysHndl = DirectCast(Marshal.PtrToStructure(pSysHndl, GetType(SystemHandle)), SystemHandle)
               ' if the SYSTEM_HANDLE object doesn't belong to the WindowsTerminal process, or
               ' if duplicating its Handle member fails, continue with the next SYSTEM_HANDLE object
               ' the duplicated handle is necessary to get information about the object (e.g. the process) it points to
+              Dim hDup = IntPtr.Zero
               If sysHndl.ProcId <> termPid OrElse NativeMethods.DuplicateHandle(sHTerm.Raw, CType(sysHndl.Handle, IntPtr), hCur, hDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) = 0 Then
                 pSysHndl += sysHndlSize
                 Continue While
@@ -205,8 +205,7 @@ Namespace TerminalProcess
       Const WM_GETICON = &H7F
 
       ' Get the ID of the Shell process that spawned the Conhost process.
-      Dim shellPid As UInteger = Nothing
-
+      Dim shellPid As UInteger = 0
       If NativeMethods.GetWindowThreadProcessId(ConWnd, shellPid) = 0 Then Return Nothing
 
       ' We don't have a proper way to figure out to what terminal app the Shell process
