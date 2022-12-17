@@ -140,7 +140,7 @@ namespace TerminalProcess
                 STATUS_INFO_LENGTH_MISMATCH = -1073741820, // NTSTATUS returned if we still didn't allocate enough memory
                 SystemHandleInformation = 16; // one of the SYSTEM_INFORMATION_CLASS values
       int status, // retrieves the NTSTATUS return value
-          infSize = 0x10000; // initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
+          infSize = 0x200000; // initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
       // open a handle to the WindowsTerminal process, granting permissions to duplicate handles
       using (SafeRes sHTerm = new SafeRes(NativeMethods.OpenProcess(PROCESS_DUP_HANDLE, 0, termPid), SafeRes.ResType.Handle))
       {
@@ -162,7 +162,7 @@ namespace TerminalProcess
           while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out int len)) == STATUS_INFO_LENGTH_MISMATCH)
           {
             Marshal.FreeHGlobal(pSysHndlInf);
-            pSysHndlInf = Marshal.AllocHGlobal(infSize = len);
+            pSysHndlInf = Marshal.AllocHGlobal(infSize = len + 0x1000);
           }
 
           using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer))

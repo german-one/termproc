@@ -184,7 +184,7 @@ static DWORD FindWTCallback(const DWORD shellPid, const DWORD termPid)
   }
 
   // allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
-  DWORD infSize = 0x10000;
+  DWORD infSize = 0x200000;
   PBYTE pSysHndlInf = LocalAlloc(LMEM_FIXED, infSize);
   if (!pSysHndlInf)
   {
@@ -199,7 +199,7 @@ static DWORD FindWTCallback(const DWORD shellPid, const DWORD termPid)
   while ((status = NtQuerySystemInformation(SystemHandleInformation, (PVOID)pSysHndlInf, infSize, &len)) == STATUS_INFO_LENGTH_MISMATCH)
   {
     LocalFree(pSysHndlInf);
-    pSysHndlInf = LocalAlloc(LMEM_FIXED, infSize = len);
+    pSysHndlInf = LocalAlloc(LMEM_FIXED, infSize = len + 0x1000);
     if (!pSysHndlInf)
     {
       CloseHandle(hShell);

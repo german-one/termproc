@@ -20,6 +20,7 @@
 ' Min. req.: .NET Framework 4.5
 
 Option Explicit On
+Option Infer On
 Option Strict On
 
 Imports System.Globalization
@@ -141,7 +142,7 @@ Namespace TerminalProcess
             STATUS_INFO_LENGTH_MISMATCH = -1073741820, ' NTSTATUS returned if we still didn't allocate enough memory
             SystemHandleInformation = 16 ' one of the SYSTEM_INFORMATION_CLASS values
       Dim status As Integer, ' retrieves the NTSTATUS return value
-          infSize = &H10000 ' initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
+          infSize = &H200000 ' initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
       ' open a handle to the WindowsTerminal process, granting permissions to duplicate handles
       Using sHTerm As New SafeRes(NativeMethods.OpenProcess(PROCESS_DUP_HANDLE, 0, termPid), SafeRes.ResType.Handle)
         If sHTerm.IsInvalid Then Return 0
@@ -155,7 +156,7 @@ Namespace TerminalProcess
             status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, len)
             If status <> STATUS_INFO_LENGTH_MISMATCH Then Exit Do
             Marshal.FreeHGlobal(pSysHndlInf)
-            infSize = len
+            infSize = len + &H1000
             pSysHndlInf = Marshal.AllocHGlobal(infSize)
           Loop
 

@@ -95,7 +95,7 @@ set TermPid=^
 %===================% STATUS_INFO_LENGTH_MISMATCH = -1073741820,^
 %===================% SystemHandleInformation = 16;^
 %=========% int status,^
-%=============% infSize = 0x10000;^
+%=============% infSize = 0x200000;^
 %=========% using (SafeRes sHTerm = new SafeRes(NativeMethods.OpenProcess(PROCESS_DUP_HANDLE, 0, termPid), SafeRes.ResType.Handle)) {^
 %===========% if (sHTerm.IsInvalid) { return 0; }^
 %===========% using (SafeRes sHShell = new SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, shellPid), SafeRes.ResType.Handle)) {^
@@ -104,7 +104,7 @@ set TermPid=^
 %=============% int len;^
 %=============% while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out len)) == STATUS_INFO_LENGTH_MISMATCH) {^
 %===============% Marshal.FreeHGlobal(pSysHndlInf);^
-%===============% pSysHndlInf = Marshal.AllocHGlobal(infSize = len);^
+%===============% pSysHndlInf = Marshal.AllocHGlobal(infSize = len + 0x1000);^
 %=============% }^
 %=============% using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer)) {^
 %===============% if (status ^^^< 0) { return 0; }^

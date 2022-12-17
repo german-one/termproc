@@ -259,7 +259,7 @@ namespace termproc::termpid
         return {};
 
       // allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
-      DWORD infSize{ 0x10000 };
+      DWORD infSize{ 0x200000 };
       auto sPSysHandlInf{ saferes::MakeLoclMem(static_cast<BYTE *>(::LocalAlloc(LMEM_FIXED, infSize))) };
       if (!sPSysHandlInf)
         return {};
@@ -269,7 +269,7 @@ namespace termproc::termpid
       // try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
       while ((status = fns.NtQuerySystemInformation(SystemHandleInformation, sPSysHandlInf.get(), infSize, &len)) == STATUS_INFO_LENGTH_MISMATCH)
       {
-        sPSysHandlInf.reset(static_cast<BYTE *>(::LocalAlloc(LMEM_FIXED, infSize = len)));
+        sPSysHandlInf.reset(static_cast<BYTE *>(::LocalAlloc(LMEM_FIXED, infSize = len + 0x1000)));
         if (!sPSysHandlInf)
           return {};
       }
