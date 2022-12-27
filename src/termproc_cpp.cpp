@@ -139,9 +139,7 @@ int main()
 #  endif
 #endif
 
-#include <Psapi.h>
 #include <SubAuth.h>
-#include <TlHelp32.h>
 #include <array>
 #include <filesystem>
 #include <memory>
@@ -164,6 +162,7 @@ int main()
       disable : 4191 /* unsafe conversion (function types) */               \
       4623 /* default constructor was implicitly defined as deleted */      \
       4626 /* assignment operator was implicitly defined as deleted */      \
+      4706 /* assignment within conditional expression */                   \
       4710 /* function not inlined */                                       \
       4711 /* function selected for inline expansion */                     \
       4820 /* padding added */                                              \
@@ -185,8 +184,8 @@ namespace saferes
     constexpr inline auto HandleDeleter{ [](const HANDLE hndl) noexcept { if (hndl && hndl != INVALID_HANDLE_VALUE) ::CloseHandle(hndl); } };
     using _handle_t = std::unique_ptr<void, decltype(HandleDeleter)>;
 
-    constexpr inline auto LoclMemDeleter{ [](BYTE *const ptr) noexcept { if (ptr) ::LocalFree(ptr); } };
-    using _loclmem_t = std::unique_ptr<BYTE, decltype(LoclMemDeleter)>;
+    constexpr inline auto GlobMemDeleter{ [](BYTE *const ptr) noexcept { if (ptr) ::GlobalFree(ptr); } };
+    using _loclmem_t = std::unique_ptr<BYTE, decltype(GlobMemDeleter)>;
   }
 
   // only use for HANDLE values that need to be released using CloseHandle()
@@ -194,8 +193,30 @@ namespace saferes
   constexpr inline auto MakeHandle{ [](const HANDLE hndl = nullptr) noexcept { return detail::_handle_t{ hndl, detail::HandleDeleter }; } };
   constexpr inline auto IsInvalidHandle{ [](const detail::_handle_t &safeHndl) noexcept { return !safeHndl || safeHndl.get() == INVALID_HANDLE_VALUE; } };
 
-  // only use for pointers that LocalAlloc() returned
-  constexpr inline auto MakeLoclMem{ [](BYTE *const ptr = nullptr) noexcept { return detail::_loclmem_t{ ptr, detail::LoclMemDeleter }; } };
+  // only use for pointers that GlobalAlloc() returned
+  constexpr inline auto MakeGlobMem{ [](BYTE *const ptr = nullptr) noexcept { return detail::_loclmem_t{ ptr, detail::GlobMemDeleter }; } };
+}
+
+namespace termproc::termname
+{
+  static std::wstring GetProcBaseName(const HANDLE hProc)
+  {
+    if (!hProc)
+      return {};
+
+    std::array<wchar_t, 1024> nameBuf{};
+    auto size{ static_cast<DWORD>(nameBuf.size()) };
+    if (!::QueryFullProcessImageNameW(hProc, 0, nameBuf.data(), &size))
+      return {};
+
+    return std::filesystem::path{ nameBuf.data() }.stem().wstring();
+  }
+
+  std::wstring GetTermBaseName(const DWORD termPid)
+  {
+    const auto sHTerm{ saferes::MakeHandle(termPid ? ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid) : nullptr) };
+    return GetProcBaseName(sHTerm.get());
+  }
 }
 
 namespace termproc::termpid
@@ -206,70 +227,49 @@ namespace termproc::termpid
     struct SYSTEM_HANDLE
     {
       const DWORD ProcId; // PID of the process the SYSTEM_HANDLE belongs to
-      const BYTE ObjTypeNum;
-      const BYTE Flags;
+      const BYTE ObjTypeId; // identifier of the object
+      const BYTE Flgs;
       const WORD Handle; // value representing an opened handle in the process
       const PVOID pObj;
       const DWORD Acc;
     };
 
-    class FnDynLoad
+    // Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
+    // Return the ID of the process that opened the handle if its name is the same as searchProcName,
+    // Return 0 if no such process is not found.
+    static DWORD GetPidOfNamedProcWithOpenProcHandle(std::wstring_view searchProcName, const DWORD findOpenProcId)
     {
-      template<typename fnptrT>
-      constexpr auto GetFunc(const char *const libName, const char *const fnName) noexcept
-      {
-        const HMODULE hModule{ ::GetModuleHandleA(libName) };
-        return hModule ? reinterpret_cast<fnptrT>(::GetProcAddress(hModule, fnName)) : fnptrT{};
-      }
-
-    public:
       using NtQuerySystemInformation_t = NTSTATUS(__stdcall *)(int SysInfClass, PVOID SysInf, DWORD SysInfLen, PDWORD RetLen);
       using CompareObjectHandles_t = BOOL(__stdcall *)(HANDLE hFirst, HANDLE hSecond);
 
-      const NtQuerySystemInformation_t NtQuerySystemInformation{};
-      const CompareObjectHandles_t CompareObjectHandles{};
-
-      FnDynLoad() noexcept :
-        NtQuerySystemInformation{ GetFunc<NtQuerySystemInformation_t>("ntdll.dll", "NtQuerySystemInformation") },
-        CompareObjectHandles{ GetFunc<CompareObjectHandles_t>("kernelbase.dll", "CompareObjectHandles") }
-      {
-      }
-
-      constexpr operator bool() const noexcept
-      {
-        return NtQuerySystemInformation && CompareObjectHandles;
-      }
-    };
-
-    // Enumerate the opened handles in the WindowsTerminal.exe process specified by the process ID passed to termPid.
-    // Return termPid if one of the process handles points to the Shell process specified by the process ID passed to shellPid.
-    // Return 0 if the Shell process is not found.
-    static DWORD FindWTCallback(const DWORD shellPid, const DWORD termPid) noexcept
-    {
       static constexpr auto STATUS_INFO_LENGTH_MISMATCH{ static_cast<NTSTATUS>(0xc0000004) }; // NTSTATUS returned if we still didn't allocate enough memory
       static constexpr auto SystemHandleInformation{ 16 }; // one of the SYSTEM_INFORMATION_CLASS values
+      static constexpr BYTE OB_TYPE_INDEX_JOB{ 7 }; // one of the SYSTEM_HANDLE.ObjTypeId values
 
-      static const FnDynLoad fns{};
-      if (!fns)
+      NtQuerySystemInformation_t NtQuerySystemInformation;
+      CompareObjectHandles_t CompareObjectHandles;
+
+      HMODULE hModule{ ::GetModuleHandleA("ntdll.dll") };
+      if (!hModule || !(NtQuerySystemInformation = reinterpret_cast<NtQuerySystemInformation_t>(::GetProcAddress(hModule, "NtQuerySystemInformation"))))
         return {};
 
-      const auto sHTerm{ saferes::MakeHandle(::OpenProcess(PROCESS_DUP_HANDLE, FALSE, termPid)) };
-      const auto sHShell{ saferes::MakeHandle(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, shellPid)) };
-      if (saferes::IsInvalidHandle(sHTerm) || saferes::IsInvalidHandle(sHShell))
+      hModule = ::GetModuleHandleA("kernelbase.dll");
+      if (!hModule || !(CompareObjectHandles = reinterpret_cast<CompareObjectHandles_t>(::GetProcAddress(hModule, "CompareObjectHandles"))))
         return {};
 
       // allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
       DWORD infSize{ 0x200000 };
-      auto sPSysHandlInf{ saferes::MakeLoclMem(static_cast<BYTE *>(::LocalAlloc(LMEM_FIXED, infSize))) };
+      auto sPSysHandlInf{ saferes::MakeGlobMem(static_cast<BYTE *>(::GlobalAlloc(GMEM_FIXED, infSize))) };
       if (!sPSysHandlInf)
         return {};
 
-      DWORD len{};
+      DWORD len;
       NTSTATUS status;
       // try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
-      while ((status = fns.NtQuerySystemInformation(SystemHandleInformation, sPSysHandlInf.get(), infSize, &len)) == STATUS_INFO_LENGTH_MISMATCH)
+      while ((status = NtQuerySystemInformation(SystemHandleInformation, sPSysHandlInf.get(), infSize, &len)) == STATUS_INFO_LENGTH_MISMATCH)
       {
-        sPSysHandlInf.reset(static_cast<BYTE *>(::LocalAlloc(LMEM_FIXED, infSize = len + 0x1000)));
+        infSize = len + 0x1000;
+        sPSysHandlInf.reset(static_cast<BYTE *>(::GlobalAlloc(GMEM_FIXED, infSize)));
         if (!sPSysHandlInf)
           return {};
       }
@@ -277,25 +277,41 @@ namespace termproc::termpid
       if (!NT_SUCCESS(status))
         return {};
 
+      const auto sHFindOpenProc{ saferes::MakeHandle(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, findOpenProcId)) }; // intentionally after NtQuerySystemInformation() was called to exclude it from the found open handles
+      if (saferes::IsInvalidHandle(sHFindOpenProc))
+        return {};
+
+      const HANDLE hThis{ GetCurrentProcess() };
+      DWORD curPid{};
+      auto sHCur{ saferes::MakeHandle() };
       // iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
       // the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
       for (const auto &sysHandle :
            std::span{ reinterpret_cast<detail::SYSTEM_HANDLE *>(sPSysHandlInf.get() + sizeof(UINT_PTR)), *reinterpret_cast<DWORD *>(sPSysHandlInf.get()) })
       {
-        HANDLE hDup{};
-        // if the SYSTEM_HANDLE object doesn't belong to the WindowsTerminal process, or
-        // if duplicating its Handle member fails, continue with the next SYSTEM_HANDLE object
-        // the duplicated handle is necessary to get information about the object (e.g. the process) it points to
-        if (sysHandle.ProcId != termPid ||
-            !::DuplicateHandle(sHTerm.get(), reinterpret_cast<HANDLE>(sysHandle.Handle), ::GetCurrentProcess(), &hDup, PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0))
+        // shortcut; OB_TYPE_INDEX_JOB is the identifier we are looking for, any other SYSTEM_HANDLE object is immediately ignored at this point
+        if (sysHandle.ObjTypeId != OB_TYPE_INDEX_JOB)
           continue;
 
-        // at this point duplicating succeeded and thus, sHDup is valid
-        const auto sHDup{ saferes::MakeHandle(hDup) };
-        // compare the duplicated handle with the handle of our shell process
-        // if they point to the same kernel object, we are going to step out of the loop and return the PID of the WindowsTerminal process
-        if (fns.CompareObjectHandles(sHDup.get(), sHShell.get()))
-          return termPid;
+        // every time the process changes, the previous handle needs to be closed and we open a new handle to the current process
+        if (curPid != sysHandle.ProcId)
+        {
+          curPid = sysHandle.ProcId;
+          sHCur.reset(::OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, curPid));
+        }
+
+        HANDLE hCurOpenDup;
+        // if the process has not been opened, or
+        // if duplicating the current one of its open handles fails, continue with the next SYSTEM_HANDLE object
+        // the duplicated handle is necessary to get information about the object (e.g. the process) it points to
+        if (saferes::IsInvalidHandle(sHCur) ||
+            !::DuplicateHandle(sHCur.get(), reinterpret_cast<HANDLE>(sysHandle.Handle), hThis, &hCurOpenDup, PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0))
+          continue;
+
+        const auto sHCurOpenDup{ saferes::MakeHandle(hCurOpenDup) };
+        if (CompareObjectHandles(sHCurOpenDup.get(), sHFindOpenProc.get()) && // both the handle of the open process and the currently duplicated handle must refer to the same kernel object
+            searchProcName == termproc::termname::GetProcBaseName(sHCur.get())) // the process name of the currently found process must meet the process name we are looking for
+          return curPid;
       }
 
       return {};
@@ -311,7 +327,6 @@ namespace termproc::termpid
       return termPid;
 
     isDetermined = true;
-    static constexpr std::wstring_view wtName{ L"WindowsTerminal.exe" };
     const auto conWnd{ ::GetConsoleWindow() };
     DWORD shellPid{};
     // Get the ID of the Shell process that spawned the Conhost process.
@@ -328,47 +343,8 @@ namespace termproc::termpid
       return (termPid = shellPid);
     }
 
-    const auto sHSnap{ saferes::MakeHandle(::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)) };
-    if (saferes::IsInvalidHandle(sHSnap))
-      return {};
-
-    PROCESSENTRY32W entry{};
-    entry.dwSize = sizeof(PROCESSENTRY32W);
-    if (!::Process32FirstW(sHSnap.get(), &entry))
-      return {};
-
-    // We don't have a proper way to figure out which WindowsTerminal process
-    // is connected with the Shell process:
-    // https://github.com/microsoft/terminal/issues/5694
-    // The assumption that the terminal is the parent process of the Shell process
-    // is gone with DefTerm (the Default Windows Terminal).
-    // Thus, I don't care about using more undocumented stuff:
-    // Get the process IDs of all WindowsTerminal processes and try to figure out
-    // which of them has a handle to the Shell process open.
-    do
-    {
-      if (wtName.compare(std::data(entry.szExeFile)) == 0)
-        termPid = detail::FindWTCallback(shellPid, entry.th32ProcessID);
-    } while (termPid == 0 && ::Process32NextW(sHSnap.get(), &entry));
-
-    return termPid;
+    return (termPid = detail::GetPidOfNamedProcWithOpenProcHandle(L"WindowsTerminal", shellPid));
   }
-}
-
-std::wstring termproc::termname::GetTermBaseName(const DWORD termPid)
-{
-  if (!termPid)
-    return {};
-
-  const auto sHTerm{ saferes::MakeHandle(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid)) };
-  if (saferes::IsInvalidHandle(sHTerm))
-    return {};
-
-  std::array<wchar_t, 1024> nameBuf{};
-  if (!::GetProcessImageFileNameW(sHTerm.get(), nameBuf.data(), static_cast<DWORD>(nameBuf.size())))
-    return {};
-
-  return std::filesystem::path{ nameBuf.data() }.stem().wstring();
 }
 
 namespace termproc::termwnd

@@ -25,6 +25,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wreserved-macro-identifier"
 #endif
+#undef _CRTBLD
+#define _CRTBLD 1
 #undef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00
 #if defined(NDEBUG) && defined(__clang__)
@@ -84,9 +86,7 @@ int main(void)
     return 1;
 
   const HWND termWnd = GetTermWnd(termPid);
-  fputws(L"Term proc: ", stdout);
-  _putws(GetTermBaseName(termPid));
-  wprintf(L"Term PID:  %lu\nTerm HWND: %08zX\n", termPid, (UINT_PTR)(void *)termWnd);
+  wprintf(L"Term proc: %s\nTerm PID:  %lu\nTerm HWND: %08zX\n", GetTermBaseName(termPid), termPid, (UINT_PTR)(void *)termWnd);
 
   Fade(termWnd, FadeOut);
   Fade(termWnd, FadeIn);
@@ -97,10 +97,9 @@ int main(void)
 #  pragma GCC diagnostic pop
 #endif
 
-#include <Psapi.h>
 #include <SubAuth.h>
-#include <TlHelp32.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <wchar.h>
 
 #ifdef NDEBUG
@@ -122,124 +121,129 @@ int main(void)
 #  endif
 #endif
 
+// Get the name of the process from the process handle.
+// Returns a pointer to a static buffer containing the name of the process.
+// If the function fails, a zero-length string will be returned.
+static wchar_t *GetProcBaseName(const HANDLE hProc)
+{
+  static wchar_t baseBuf[MAX_PATH] = { 0 };
+  *baseBuf = L'\0';
+  if (!hProc)
+    return baseBuf;
+
+  wchar_t nameBuf[1024] = { 0 };
+  DWORD size = 1024;
+  if (QueryFullProcessImageNameW(hProc, 0, nameBuf, &size))
+    _wsplitpath_s(nameBuf, NULL, 0, NULL, 0, baseBuf, MAX_PATH, NULL, 0);
+
+  return baseBuf;
+}
+
 // undocumented SYSTEM_HANDLE structure, SYSTEM_HANDLE_TABLE_ENTRY_INFO might be the actual name
 typedef struct
 {
   const DWORD ProcId; // PID of the process the SYSTEM_HANDLE belongs to
-  const BYTE ObjTypeNum;
-  const BYTE Flags;
+  const BYTE ObjTypeId; // identifier of the object
+  const BYTE Flgs;
   const WORD Handle; // value representing an opened handle in the process
   const PVOID pObj;
   const DWORD Acc;
 } SYSTEM_HANDLE, *PSYSTEM_HANDLE;
 
-typedef NTSTATUS(__stdcall *NtQuerySystemInformation_t)(int SysInfClass, PVOID SysInf, DWORD SysInfLen, PDWORD RetLen);
-typedef BOOL(__stdcall *CompareObjectHandles_t)(HANDLE hFirst, HANDLE hSecond);
-
-static BOOL FnDynLoad(NtQuerySystemInformation_t *const pNtQuerySystemInformation, CompareObjectHandles_t *const pCompareObjectHandles)
+// Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
+// Return the ID of the process that opened the handle if its name is the same as searchProcName,
+// Return 0 if no such process is not found.
+static DWORD GetPidOfNamedProcWithOpenProcHandle(const wchar_t *const searchProcName, const DWORD findOpenProcId)
 {
-  static NtQuerySystemInformation_t NtQuerySystemInformation;
-  static CompareObjectHandles_t CompareObjectHandles;
+  typedef NTSTATUS(__stdcall * NtQuerySystemInformation_t)(int SysInfClass, PVOID SysInf, DWORD SysInfLen, PDWORD RetLen);
+  typedef BOOL(__stdcall * CompareObjectHandles_t)(HANDLE hFirst, HANDLE hSecond);
 
-  if (!NtQuerySystemInformation || !CompareObjectHandles)
-  {
-    HMODULE hModule = GetModuleHandleA("ntdll.dll");
-    if (!hModule ||
-        !(NtQuerySystemInformation = (NtQuerySystemInformation_t)GetProcAddress(hModule, "NtQuerySystemInformation")))
-      return FALSE;
-
-    hModule = GetModuleHandleA("kernelbase.dll");
-    if (!hModule ||
-        !(CompareObjectHandles = (CompareObjectHandles_t)GetProcAddress(hModule, "CompareObjectHandles")))
-      return FALSE;
-  }
-
-  *pNtQuerySystemInformation = NtQuerySystemInformation;
-  *pCompareObjectHandles = CompareObjectHandles;
-  return TRUE;
-}
-
-// Enumerate the opened handles in the WindowsTerminal.exe process specified by the process ID passed to termPid.
-// Return termPid if one of the process handles points to the Shell process specified by the process ID passed to shellPid.
-// Return 0 if the Shell process is not found.
-static DWORD FindWTCallback(const DWORD shellPid, const DWORD termPid)
-{
   static const NTSTATUS STATUS_INFO_LENGTH_MISMATCH = (NTSTATUS)0xc0000004; // NTSTATUS returned if we still didn't allocate enough memory
   static const int SystemHandleInformation = 16; // one of the SYSTEM_INFORMATION_CLASS values
+  static const BYTE OB_TYPE_INDEX_JOB = 7; // one of the SYSTEM_HANDLE.ObjTypeId values
 
   NtQuerySystemInformation_t NtQuerySystemInformation;
   CompareObjectHandles_t CompareObjectHandles;
-  if (!FnDynLoad(&NtQuerySystemInformation, &CompareObjectHandles))
+
+  HMODULE hModule = GetModuleHandleA("ntdll.dll");
+  if (!hModule || !(NtQuerySystemInformation = (NtQuerySystemInformation_t)GetProcAddress(hModule, "NtQuerySystemInformation")))
     return 0;
 
-  const HANDLE hTerm = OpenProcess(PROCESS_DUP_HANDLE, FALSE, termPid);
-  if (!hTerm)
+  hModule = GetModuleHandleA("kernelbase.dll");
+  if (!hModule || !(CompareObjectHandles = (CompareObjectHandles_t)GetProcAddress(hModule, "CompareObjectHandles")))
     return 0;
-
-  const HANDLE hShell = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, shellPid);
-  if (!hShell)
-  {
-    CloseHandle(hTerm);
-    return 0;
-  }
 
   // allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
   DWORD infSize = 0x200000;
-  PBYTE pSysHndlInf = LocalAlloc(LMEM_FIXED, infSize);
+  PBYTE pSysHndlInf = GlobalAlloc(GMEM_FIXED, infSize);
   if (!pSysHndlInf)
-  {
-    CloseHandle(hShell);
-    CloseHandle(hTerm);
     return 0;
-  }
 
-  DWORD len = 0;
+  DWORD len;
   NTSTATUS status;
   // try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
   while ((status = NtQuerySystemInformation(SystemHandleInformation, (PVOID)pSysHndlInf, infSize, &len)) == STATUS_INFO_LENGTH_MISMATCH)
   {
-    LocalFree(pSysHndlInf);
-    pSysHndlInf = LocalAlloc(LMEM_FIXED, infSize = len + 0x1000);
+    GlobalFree(pSysHndlInf);
+    infSize = len + 0x1000;
+    pSysHndlInf = GlobalAlloc(GMEM_FIXED, infSize);
     if (!pSysHndlInf)
-    {
-      CloseHandle(hShell);
-      CloseHandle(hTerm);
       return 0;
-    }
   }
 
-  DWORD pid = 0;
-  if (!NT_SUCCESS(status))
-    goto finally;
+  HANDLE hFindOpenProc;
+  if (!NT_SUCCESS(status) ||
+      !(hFindOpenProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, findOpenProcId))) // intentionally after NtQuerySystemInformation() was called to exclude it from the found open handles
+  {
+    GlobalFree(pSysHndlInf);
+    return 0;
+  }
 
+  const HANDLE hThis = GetCurrentProcess();
+  DWORD curPid = 0, foundPid = 0;
+  HANDLE hCur = NULL;
   // iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
   // the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
-  for (const SYSTEM_HANDLE *pSysHndl = (PSYSTEM_HANDLE)(pSysHndlInf + sizeof(UINT_PTR)), *const pEnd = pSysHndl + *(DWORD *)(pSysHndlInf);
-       pSysHndl < pEnd && pid == 0;
+  for (const SYSTEM_HANDLE *pSysHndl = (PSYSTEM_HANDLE)(pSysHndlInf + sizeof(intptr_t)),
+                           *const pEnd = pSysHndl + *(DWORD *)pSysHndlInf;
+       !foundPid && pSysHndl < pEnd;
        ++pSysHndl)
   {
-    HANDLE hDup = NULL;
-    // if the SYSTEM_HANDLE object doesn't belong to the WindowsTerminal process, or
-    // if duplicating its Handle member fails, continue with the next SYSTEM_HANDLE object
-    // the duplicated handle is necessary to get information about the object (e.g. the process) it points to
-    if (pSysHndl->ProcId != termPid ||
-        !DuplicateHandle(hTerm, (HANDLE)(UINT_PTR)pSysHndl->Handle, GetCurrentProcess(), &hDup, PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0))
+    // shortcut; OB_TYPE_INDEX_JOB is the identifier we are looking for, any other SYSTEM_HANDLE object is immediately ignored at this point
+    if (pSysHndl->ObjTypeId != OB_TYPE_INDEX_JOB)
       continue;
 
-    // at this point duplicating succeeded and thus, hDup is valid
-    // compare the duplicated handle with the handle of our shell process
-    // if they point to the same kernel object, we are going to step out of the loop and return the PID of the WindowsTerminal process
-    if (CompareObjectHandles(hDup, hShell))
-      pid = termPid;
+    // every time the process changes, the previous handle needs to be closed and we open a new handle to the current process
+    if (curPid != pSysHndl->ProcId)
+    {
+      curPid = pSysHndl->ProcId;
+      if (hCur)
+        CloseHandle(hCur);
 
-    CloseHandle(hDup);
+      hCur = OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, curPid);
+    }
+
+    HANDLE hCurOpenDup;
+    // if the process has not been opened, or
+    // if duplicating the current one of its open handles fails, continue with the next SYSTEM_HANDLE object
+    // the duplicated handle is necessary to get information about the object (e.g. the process) it points to
+    if (!hCur ||
+        !DuplicateHandle(hCur, (HANDLE)(intptr_t)pSysHndl->Handle, hThis, &hCurOpenDup, PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0))
+      continue;
+
+    if (CompareObjectHandles(hCurOpenDup, hFindOpenProc) && // both the handle of the open process and the currently duplicated handle must refer to the same kernel object
+        0 == lstrcmpW(GetProcBaseName(hCur), searchProcName)) // the process name of the currently found process must meet the process name we are looking for
+      foundPid = curPid;
+
+    CloseHandle(hCurOpenDup);
   }
 
-finally:
-  LocalFree(pSysHndlInf);
-  CloseHandle(hShell);
-  CloseHandle(hTerm);
-  return pid;
+  if (hCur)
+    CloseHandle(hCur);
+
+  GlobalFree(pSysHndlInf);
+  CloseHandle(hFindOpenProc);
+  return foundPid;
 }
 
 DWORD GetTermPid(void)
@@ -267,52 +271,17 @@ DWORD GetTermPid(void)
     return (termPid = shellPid);
   }
 
-  const HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-  if (hSnap == INVALID_HANDLE_VALUE)
-    return 0;
-
-  PROCESSENTRY32W entry = { .dwSize = sizeof(PROCESSENTRY32W) };
-  if (!Process32FirstW(hSnap, &entry))
-  {
-    CloseHandle(hSnap);
-    return 0;
-  }
-
-  // We don't have a proper way to figure out which WindowsTerminal process
-  // is connected with the Shell process:
-  // https://github.com/microsoft/terminal/issues/5694
-  // The assumption that the terminal is the parent process of the Shell process
-  // is gone with DefTerm (the Default Windows Terminal).
-  // Thus, I don't care about using more undocumented stuff:
-  // Get the process IDs of all WindowsTerminal processes and try to figure out
-  // which of them has a handle to the Shell process open.
-  do
-  {
-    if (lstrcmpW(entry.szExeFile, L"WindowsTerminal.exe") == 0)
-      termPid = FindWTCallback(shellPid, entry.th32ProcessID);
-  } while (termPid == 0 && Process32NextW(hSnap, &entry));
-
-  CloseHandle(hSnap);
-  return termPid;
+  return (termPid = GetPidOfNamedProcWithOpenProcHandle(L"WindowsTerminal", shellPid));
 }
 
 wchar_t *GetTermBaseName(const DWORD termPid)
 {
-  static wchar_t baseBuf[MAX_PATH] = { 0 };
-  *baseBuf = L'\0';
-  if (!termPid)
-    return baseBuf;
+  const HANDLE hTerm = termPid ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid) : NULL;
+  wchar_t *const baseName = GetProcBaseName(hTerm);
+  if (hTerm)
+    CloseHandle(hTerm);
 
-  const HANDLE hTerm = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid);
-  if (!hTerm)
-    return baseBuf;
-
-  wchar_t nameBuf[1024] = { 0 };
-  if (GetProcessImageFileNameW(hTerm, nameBuf, 1024))
-    _wsplitpath_s(nameBuf, NULL, 0, NULL, 0, baseBuf, MAX_PATH, NULL, 0);
-
-  CloseHandle(hTerm);
-  return baseBuf;
+  return baseName;
 }
 
 typedef struct

@@ -32,8 +32,10 @@ set TermPid=^
 %===% Add-Type '^
 %=====% using System;^
 %=====% using System.Diagnostics;^
+%=====% using System.IO;^
 %=====% using System.Runtime.ConstrainedExecution;^
 %=====% using System.Runtime.InteropServices;^
+%=====% using System.Text;^
 %=====% public static class WinTerm {^
 %=======% private static class NativeMethods {^
 %=========% [DllImport(\"kernel32.dll\")]^
@@ -52,6 +54,8 @@ set TermPid=^
 %=========% internal static extern int NtQuerySystemInformation(int SysInfClass, IntPtr SysInf, int SysInfLen, out int RetLen);^
 %=========% [DllImport(\"kernel32.dll\")]^
 %=========% internal static extern IntPtr OpenProcess(int Acc, int Inherit, uint ProcId);^
+%=========% [DllImport(\"kernel32.dll\", CharSet = CharSet.Unicode)]^
+%=========% internal static extern int QueryFullProcessImageNameW(IntPtr Proc, int Flgs, StringBuilder Name, ref int Size);^
 %=========% [DllImport(\"user32.dll\")]^
 %=========% internal static extern IntPtr SendMessageW(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);^
 %=======% }^
@@ -83,52 +87,67 @@ set TermPid=^
 %=======% [StructLayout(LayoutKind.Sequential)]^
 %=======% private struct SystemHandle {^
 %=========% internal readonly uint ProcId;^
-%=========% internal readonly byte ObjTypeNum;^
+%=========% internal readonly byte ObjTypeId;^
 %=========% internal readonly byte Flgs;^
 %=========% internal readonly ushort Handle;^
 %=========% internal readonly IntPtr pObj;^
 %=========% internal readonly uint Acc;^
 %=======% }^
-%=======% private static uint FindWTCallback(uint shellPid, uint termPid) {^
+%=======% private static string GetProcBaseName(IntPtr hProc) {^
+%=========% if (hProc == IntPtr.Zero) { return \"\"; }^
+%=========% int capacity = 1024;^
+%=========% StringBuilder nameBuf = new StringBuilder(capacity);^
+%=========% if (NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, ref capacity) == 0) { return \"\"; }^
+%=========% return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, capacity));^
+%=======% }^
+%=======% static uint GetPidOfNamedProcWithOpenProcHandle(string searchProcName, uint findOpenProcId) {^
 %=========% const int PROCESS_DUP_HANDLE = 0x0040,^
 %===================% PROCESS_QUERY_LIMITED_INFORMATION = 0x1000,^
 %===================% STATUS_INFO_LENGTH_MISMATCH = -1073741820,^
 %===================% SystemHandleInformation = 16;^
-%=========% int status,^
-%=============% infSize = 0x200000;^
-%=========% using (SafeRes sHTerm = new SafeRes(NativeMethods.OpenProcess(PROCESS_DUP_HANDLE, 0, termPid), SafeRes.ResType.Handle)) {^
-%===========% if (sHTerm.IsInvalid) { return 0; }^
-%===========% using (SafeRes sHShell = new SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, shellPid), SafeRes.ResType.Handle)) {^
-%=============% if (sHShell.IsInvalid) { return 0; }^
-%=============% IntPtr pSysHndlInf = Marshal.AllocHGlobal(infSize);^
-%=============% int len;^
-%=============% while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out len)) == STATUS_INFO_LENGTH_MISMATCH) {^
-%===============% Marshal.FreeHGlobal(pSysHndlInf);^
-%===============% pSysHndlInf = Marshal.AllocHGlobal(infSize = len + 0x1000);^
-%=============% }^
-%=============% using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer)) {^
-%===============% if (status ^^^< 0) { return 0; }^
-%===============% uint pid = 0;^
-%===============% IntPtr hCur = NativeMethods.GetCurrentProcess();^
-%===============% int sysHndlSize = Marshal.SizeOf(typeof(SystemHandle));^
-%===============% for (IntPtr pSysHndl = (IntPtr)((long)sPSysHndlInf.Raw + IntPtr.Size), pEnd = (IntPtr)((long)pSysHndl + Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize);^
-%====================% (pSysHndl == pEnd) == false;^
-%====================% pSysHndl = (IntPtr)((long)pSysHndl + sysHndlSize)) {^
-%=================% SystemHandle sysHndl = (SystemHandle)Marshal.PtrToStructure(pSysHndl, typeof(SystemHandle));^
-%=================% IntPtr hDup;^
-%=================% if ((sysHndl.ProcId == termPid) == false ^^^|^^^|^
-%=====================% NativeMethods.DuplicateHandle(sHTerm.Raw, (IntPtr)sysHndl.Handle, hCur, out hDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) == 0) {^
-%===================% continue;^
-%=================% }^
-%=================% using (SafeRes sHDup = new SafeRes(hDup, SafeRes.ResType.Handle)) {^
-%===================% if ((NativeMethods.CompareObjectHandles(sHDup.Raw, sHShell.Raw) == 0) == false) {^
-%=====================% pid = termPid;^
-%=====================% break;^
-%===================% }^
+%=========% const byte OB_TYPE_INDEX_JOB = 7;^
+%=========% int status, infSize = 0x200000;^
+%=========% IntPtr pSysHndlInf = Marshal.AllocHGlobal(infSize);^
+%=========% int len;^
+%=========% while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out len)) == STATUS_INFO_LENGTH_MISMATCH)^
+%=========% {^
+%===========% Marshal.FreeHGlobal(pSysHndlInf);^
+%===========% pSysHndlInf = Marshal.AllocHGlobal(infSize = len + 0x1000);^
+%=========% }^
+%=========% using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer))^
+%=========% {^
+%===========% if (status ^^^< 0) { return 0; }^
+%===========% using (SafeRes sHFindOpenProc = new SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, findOpenProcId), SafeRes.ResType.Handle))^
+%===========% {^
+%=============% if (sHFindOpenProc.IsInvalid) { return 0; }^
+%=============% uint foundPid = 0, curPid = 0;^
+%=============% IntPtr hThis = NativeMethods.GetCurrentProcess(), hCur = IntPtr.Zero;^
+%=============% int sysHndlSize = Marshal.SizeOf(typeof(SystemHandle));^
+%=============% for (IntPtr pSysHndl = (IntPtr)((long)sPSysHndlInf.Raw + IntPtr.Size), pEnd = (IntPtr)((long)pSysHndl + Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize);^
+%==================% (pSysHndl == pEnd) == false;^
+%==================% pSysHndl = (IntPtr)((long)pSysHndl + sysHndlSize)) {^
+%===============% SystemHandle sysHndl = (SystemHandle)Marshal.PtrToStructure(pSysHndl, typeof(SystemHandle));^
+%===============% if ((sysHndl.ObjTypeId == OB_TYPE_INDEX_JOB) == false) { continue; }^
+%===============% if ((curPid == sysHndl.ProcId) == false) {^
+%=================% curPid = sysHndl.ProcId;^
+%=================% if ((hCur == IntPtr.Zero) == false ^^^&^^^& (NativeMethods.CloseHandle(hCur) == 0) == false) { hCur = IntPtr.Zero; }^
+%=================% hCur = NativeMethods.OpenProcess(PROCESS_DUP_HANDLE ^^^| PROCESS_QUERY_LIMITED_INFORMATION, 0, curPid);^
+%===============% }^
+%===============% IntPtr hCurOpenDup;^
+%===============% if (hCur == IntPtr.Zero ^^^|^^^|^
+%===================% NativeMethods.DuplicateHandle(hCur, (IntPtr)sysHndl.Handle, hThis, out hCurOpenDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) == 0) {^
+%=================% continue;^
+%===============% }^
+%===============% using (SafeRes sHCurOpenDup = new SafeRes(hCurOpenDup, SafeRes.ResType.Handle)) {^
+%=================% if ((NativeMethods.CompareObjectHandles(sHCurOpenDup.Raw, sHFindOpenProc.Raw) == 0) == false ^^^&^^^&^
+%=====================% searchProcName == GetProcBaseName(hCur)) {^
+%===================% foundPid = curPid;^
+%===================% break;^
 %=================% }^
 %===============% }^
-%===============% return pid;^
 %=============% }^
+%=============% if ((hCur == IntPtr.Zero) == false ^^^&^^^& NativeMethods.CloseHandle(hCur) == 0) { return 0; }^
+%=============% return foundPid;^
 %===========% }^
 %=========% }^
 %=======% }^
@@ -140,10 +159,8 @@ set TermPid=^
 %=========% if ((NativeMethods.SendMessageW(conWnd, WM_GETICON, IntPtr.Zero, IntPtr.Zero) == IntPtr.Zero) == false) {^
 %===========% return Process.GetProcessById((int)shellPid);^
 %=========% }^
-%=========% foreach (Process termProc in Process.GetProcessesByName(\"WindowsTerminal\")) {^
-%===========% uint termPid = FindWTCallback(shellPid, (uint)termProc.Id);^
-%===========% if ((termPid == 0) == false) { return termProc; }^
-%=========% }^
+%=========% uint termPid = GetPidOfNamedProcWithOpenProcHandle(\"WindowsTerminal\", shellPid);^
+%=========% if ((termPid == 0) == false) { return Process.GetProcessById((int)termPid); }^
 %=========% return null;^
 %=======% }^
 %=======% private static readonly Process termProc = GetTermProc();^
@@ -233,4 +250,3 @@ endlocal &set "Fade=%Fade%"
 if !!# neq # set "Fade=%Fade:^^=%"
 exit /b
 ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-

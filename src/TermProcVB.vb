@@ -24,8 +24,10 @@ Option Infer On
 Option Strict On
 
 Imports System.Globalization
+Imports System.IO
 Imports System.Runtime.ConstrainedExecution
 Imports System.Runtime.InteropServices
+Imports System.Text
 Imports System.Threading
 
 Namespace TerminalProcess
@@ -56,6 +58,9 @@ Namespace TerminalProcess
       End Function
       <DllImport("kernel32.dll")>
       Friend Shared Function OpenProcess(ByVal Acc As Integer, ByVal Inherit As Integer, ByVal ProcId As UInteger) As IntPtr
+      End Function
+      <DllImport("kernel32.dll", CharSet:=CharSet.Unicode)>
+      Friend Shared Function QueryFullProcessImageNameW(ByVal Proc As IntPtr, ByVal Flgs As Integer, ByVal Name As StringBuilder, ByRef Size As Integer) As Integer
       End Function
       <DllImport("user32.dll")>
       Friend Shared Function SendMessageW(ByVal hWnd As IntPtr, ByVal Msg As Integer, ByVal wParam As IntPtr, ByVal lParam As IntPtr) As IntPtr
@@ -126,76 +131,91 @@ Namespace TerminalProcess
     <StructLayout(LayoutKind.Sequential)>
     Private Structure SystemHandle
       Friend ReadOnly ProcId As UInteger ' PID of the process the SYSTEM_HANDLE belongs to
-      Friend ReadOnly ObjTypeNum As Byte
+      Friend ReadOnly ObjTypeId As Byte ' identifier of the object
       Friend ReadOnly Flgs As Byte
       Friend ReadOnly Handle As UShort ' value representing an opened handle in the process
       Friend ReadOnly pObj As IntPtr
       Friend ReadOnly Acc As UInteger
     End Structure
 
-    ' Enumerate the opened handles in the WindowsTerminal.exe process specified by the process ID passed to termPid.
-    ' Return termPid if one of the process handles points to the Shell process specified by the process ID passed to shellPid.
-    ' Return 0 if the Shell process is not found.
-    Private Function FindWTCallback(ByVal shellPid As UInteger, ByVal termPid As UInteger) As UInteger
+    Private Function GetProcBaseName(ByVal hProc As IntPtr) As String
+      If hProc = IntPtr.Zero Then Return ""
+      Dim capacity = 1024, nameBuf = New StringBuilder(capacity)
+      If NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, capacity) = 0 Then Return ""
+      Return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, capacity))
+    End Function
+
+    ' Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
+    ' Return the ID of the process that opened the handle if its name Is the same as searchProcName,
+    ' Return 0 if no such process Is Not found.
+    Private Function GetPidOfNamedProcWithOpenProcHandle(ByVal searchProcName As String, ByVal findOpenProcId As UInteger) As UInteger
       Const PROCESS_DUP_HANDLE = &H40, ' access right to duplicate handles
             PROCESS_QUERY_LIMITED_INFORMATION = &H1000, ' access right to retrieve certain process information
             STATUS_INFO_LENGTH_MISMATCH = -1073741820, ' NTSTATUS returned if we still didn't allocate enough memory
-            SystemHandleInformation = 16 ' one of the SYSTEM_INFORMATION_CLASS values
+            SystemHandleInformation = 16, ' one of the SYSTEM_INFORMATION_CLASS values
+            OB_TYPE_INDEX_JOB As Byte = 7 ' one of the SYSTEM_HANDLE.ObjTypeId values
       Dim status As Integer, ' retrieves the NTSTATUS return value
           infSize = &H200000 ' initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
-      ' open a handle to the WindowsTerminal process, granting permissions to duplicate handles
-      Using sHTerm As New SafeRes(NativeMethods.OpenProcess(PROCESS_DUP_HANDLE, 0, termPid), SafeRes.ResType.Handle)
-        If sHTerm.IsInvalid Then Return 0
-        ' open a handle to the Shell process
-        Using sHShell As New SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, shellPid), SafeRes.ResType.Handle)
-          If sHShell.IsInvalid Then Return 0
+      ' allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
+      Dim pSysHndlInf = Marshal.AllocHGlobal(infSize), len = 0
+      Do ' try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
+        status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, len)
+        If status <> STATUS_INFO_LENGTH_MISMATCH Then Exit Do
+        Marshal.FreeHGlobal(pSysHndlInf)
+        infSize = len + &H1000
+        pSysHndlInf = Marshal.AllocHGlobal(infSize)
+      Loop
 
-          ' allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
-          Dim pSysHndlInf = Marshal.AllocHGlobal(infSize), len = 0
-          Do ' try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
-            status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, len)
-            If status <> STATUS_INFO_LENGTH_MISMATCH Then Exit Do
-            Marshal.FreeHGlobal(pSysHndlInf)
-            infSize = len + &H1000
-            pSysHndlInf = Marshal.AllocHGlobal(infSize)
-          Loop
+      Using sPSysHndlInf As New SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer)
+        If status < 0 Then Return 0
 
-          Using sPSysHndlInf As New SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer)
-            If status < 0 Then Return 0
-
-            Dim pid As UInteger = 0
-            Dim hCur = NativeMethods.GetCurrentProcess()
-            Dim sysHndlSize = Marshal.SizeOf(GetType(SystemHandle))
-            ' iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
-            ' the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
-            Dim pSysHndl = sPSysHndlInf.Raw + IntPtr.Size, pEnd = pSysHndl + (Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize)
-            While pSysHndl <> pEnd
-              ' get one SYSTEM_HANDLE at a time
-              Dim sysHndl = DirectCast(Marshal.PtrToStructure(pSysHndl, GetType(SystemHandle)), SystemHandle)
-              ' if the SYSTEM_HANDLE object doesn't belong to the WindowsTerminal process, or
-              ' if duplicating its Handle member fails, continue with the next SYSTEM_HANDLE object
-              ' the duplicated handle is necessary to get information about the object (e.g. the process) it points to
-              Dim hDup = IntPtr.Zero
-              If sysHndl.ProcId <> termPid OrElse NativeMethods.DuplicateHandle(sHTerm.Raw, CType(sysHndl.Handle, IntPtr), hCur, hDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) = 0 Then
-                pSysHndl += sysHndlSize
-                Continue While
-              End If
-
-              ' at this point duplicating succeeded and thus, sHDup is valid
-              Using sHDup As New SafeRes(hDup, SafeRes.ResType.Handle)
-                ' compare the duplicated handle with the handle of our shell process
-                ' if they point to the same kernel object, we are going to step out of the loop and return the PID of the WindowsTerminal process
-                If NativeMethods.CompareObjectHandles(sHDup.Raw, sHShell.Raw) <> 0 Then
-                  pid = termPid
-                  Exit While
-                End If
-              End Using
-
+        Using sHFindOpenProc As New SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, findOpenProcId), SafeRes.ResType.Handle) ' intentionally after NtQuerySystemInformation() was called to exclude it from the found open handles
+          If sHFindOpenProc.IsInvalid Then Return 0
+          Dim foundPid As UInteger = 0, curPid As UInteger = 0
+          Dim hThis = NativeMethods.GetCurrentProcess()
+          Dim hCur = IntPtr.Zero
+          Dim sysHndlSize = Marshal.SizeOf(GetType(SystemHandle))
+          ' iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
+          ' the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
+          Dim pSysHndl = sPSysHndlInf.Raw + IntPtr.Size, pEnd = pSysHndl + (Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize)
+          While pSysHndl <> pEnd
+            ' get one SYSTEM_HANDLE at a time
+            Dim sysHndl = DirectCast(Marshal.PtrToStructure(pSysHndl, GetType(SystemHandle)), SystemHandle)
+            ' shortcut; OB_TYPE_INDEX_JOB is the identifier we are looking for, any other SYSTEM_HANDLE object is immediately ignored at this point
+            If sysHndl.ObjTypeId <> OB_TYPE_INDEX_JOB Then
               pSysHndl += sysHndlSize
-            End While
+              Continue While
+            End If
 
-            Return pid
-          End Using
+            ' every time the process changes, the previous handle needs to be closed and we open a new handle to the current process
+            If curPid <> sysHndl.ProcId Then
+              curPid = sysHndl.ProcId
+              If hCur <> IntPtr.Zero AndAlso NativeMethods.CloseHandle(hCur) <> 0 Then hCur = IntPtr.Zero
+              hCur = NativeMethods.OpenProcess(PROCESS_DUP_HANDLE Or PROCESS_QUERY_LIMITED_INFORMATION, 0, curPid)
+            End If
+
+            ' if the process has not been opened, or
+            ' if duplicating the current one of its open handles fails, continue with the next SYSTEM_HANDLE object
+            ' the duplicated handle is necessary to get information about the object (e.g. the process) it points to
+            Dim hCurOpenDup = IntPtr.Zero
+            If hCur = IntPtr.Zero OrElse NativeMethods.DuplicateHandle(hCur, CType(sysHndl.Handle, IntPtr), hThis, hCurOpenDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) = 0 Then
+              pSysHndl += sysHndlSize
+              Continue While
+            End If
+
+            Using sHCurOpenDup As New SafeRes(hCurOpenDup, SafeRes.ResType.Handle)
+              If NativeMethods.CompareObjectHandles(sHCurOpenDup.Raw, sHFindOpenProc.Raw) <> 0 AndAlso _ ' both the handle of the open process and the currently duplicated handle must refer to the same kernel object
+                  searchProcName = GetProcBaseName(hCur) Then ' the process name of the currently found process must meet the process name we are looking for
+                foundPid = curPid
+                Exit While
+              End If
+            End Using
+
+            pSysHndl += sysHndlSize
+          End While
+
+          If hCur <> IntPtr.Zero AndAlso NativeMethods.CloseHandle(hCur) = 0 Then Return 0
+          Return foundPid
         End Using
       End Using
     End Function
@@ -226,12 +246,9 @@ Namespace TerminalProcess
       ' The assumption that the terminal is the parent process of the Shell process
       ' is gone with DefTerm (the Default Windows Terminal).
       ' Thus, I don't care about using more undocumented stuff:
-      ' Get the process IDs of all WindowsTerminal processes and try to figure out
-      ' which of them has a handle to the Shell process open.
-      For Each trmProc In Process.GetProcessesByName("WindowsTerminal")
-        Dim termPid = FindWTCallback(shellPid, CUInt(trmProc.Id))
-        If termPid <> 0 Then Return trmProc
-      Next
+      ' Try to figure out which of WindowsTerminal processes has a handle to the Shell process open.
+      Dim termPid = GetPidOfNamedProcWithOpenProcHandle("WindowsTerminal", shellPid)
+      If termPid <> 0 Then Return Process.GetProcessById(CInt(termPid))
 
       Return Nothing
     End Function

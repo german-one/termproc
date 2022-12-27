@@ -24,8 +24,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 Add-Type @'
   using System;
   using System.Diagnostics;
+  using System.IO;
   using System.Runtime.ConstrainedExecution;
   using System.Runtime.InteropServices;
+  using System.Text;
 
   //# provides the TermProc property referencing the process of the terminal connected to the current console application
   public static class WinTerm {
@@ -47,6 +49,8 @@ Add-Type @'
       internal static extern int NtQuerySystemInformation(int SysInfClass, IntPtr SysInf, int SysInfLen, out int RetLen);
       [DllImport("kernel32.dll")]
       internal static extern IntPtr OpenProcess(int Acc, int Inherit, uint ProcId);
+      [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+      internal static extern int QueryFullProcessImageNameW(IntPtr Proc, int Flgs, StringBuilder Name, ref int Size);
       [DllImport("user32.dll")]
       internal static extern IntPtr SendMessageW(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
     }
@@ -94,72 +98,88 @@ Add-Type @'
     [StructLayout(LayoutKind.Sequential)]
     private struct SystemHandle {
       internal readonly uint ProcId; //# PID of the process the SYSTEM_HANDLE belongs to
-      internal readonly byte ObjTypeNum;
+      internal readonly byte ObjTypeId; //# identifier of the object
       internal readonly byte Flgs;
       internal readonly ushort Handle; //# value representing an opened handle in the process
       internal readonly IntPtr pObj;
       internal readonly uint Acc;
     }
 
-    //# Enumerate the opened handles in the WindowsTerminal.exe process specified by the process ID passed to termPid.
-    //# Return termPid if one of the process handles points to the Shell process specified by the process ID passed to shellPid.
-    //# Return 0 if the Shell process is not found.
-    private static uint FindWTCallback(uint shellPid, uint termPid) {
+    private static string GetProcBaseName(IntPtr hProc) {
+      if (hProc == IntPtr.Zero) { return ""; }
+      int capacity = 1024;
+      StringBuilder nameBuf = new StringBuilder(capacity);
+      if (NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, ref capacity) == 0) { return ""; }
+      return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, capacity));
+    }
+
+    //# Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
+    //# Return the ID of the process that opened the handle if its name is the same as searchProcName,
+    //# Return 0 if no such process is not found.
+    static uint GetPidOfNamedProcWithOpenProcHandle(string searchProcName, uint findOpenProcId) {
       const int PROCESS_DUP_HANDLE = 0x0040, //# access right to duplicate handles
                 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000, //# access right to retrieve certain process information
                 STATUS_INFO_LENGTH_MISMATCH = -1073741820, //# NTSTATUS returned if we still didn't allocate enough memory
                 SystemHandleInformation = 16; //# one of the SYSTEM_INFORMATION_CLASS values
+      const byte OB_TYPE_INDEX_JOB = 7; //# one of the SYSTEM_HANDLE.ObjTypeId values
       int status, //# retrieves the NTSTATUS return value
           infSize = 0x200000; //# initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
-      //# open a handle to the WindowsTerminal process, granting permissions to duplicate handles
-      using (SafeRes sHTerm = new SafeRes(NativeMethods.OpenProcess(PROCESS_DUP_HANDLE, 0, termPid), SafeRes.ResType.Handle)) {
-        if (sHTerm.IsInvalid) { return 0; }
-        //# open a handle to the Shell process
-        using (SafeRes sHShell = new SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, shellPid), SafeRes.ResType.Handle)) {
-          if (sHShell.IsInvalid) { return 0; }
-          //# allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
-          IntPtr pSysHndlInf = Marshal.AllocHGlobal(infSize);
-          //# try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
-          int len;
-          while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out len)) == STATUS_INFO_LENGTH_MISMATCH) {
-            Marshal.FreeHGlobal(pSysHndlInf);
-            pSysHndlInf = Marshal.AllocHGlobal(infSize = len + 0x1000);
-          }
 
-          using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer)) {
-            if (status < 0) { return 0; }
-            uint pid = 0;
-            IntPtr hCur = NativeMethods.GetCurrentProcess();
-            int sysHndlSize = Marshal.SizeOf(typeof(SystemHandle));
-            //# iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
-            //# the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
-            for (IntPtr pSysHndl = (IntPtr)((long)sPSysHndlInf.Raw + IntPtr.Size), pEnd = (IntPtr)((long)pSysHndl + Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize);
-                 pSysHndl != pEnd;
-                 pSysHndl = (IntPtr)((long)pSysHndl + sysHndlSize)) {
-              //# get one SYSTEM_HANDLE at a time
-              SystemHandle sysHndl = (SystemHandle)Marshal.PtrToStructure(pSysHndl, typeof(SystemHandle));
-              //# if the SYSTEM_HANDLE object doesn't belong to the WindowsTerminal process, or
-              //# if duplicating its Handle member fails, continue with the next SYSTEM_HANDLE object
-              //# the duplicated handle is necessary to get information about the object (e.g. the process) it points to
-              IntPtr hDup;
-              if (sysHndl.ProcId != termPid ||
-                  NativeMethods.DuplicateHandle(sHTerm.Raw, (IntPtr)sysHndl.Handle, hCur, out hDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) == 0) {
-                continue;
-              }
+      //# allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
+      IntPtr pSysHndlInf = Marshal.AllocHGlobal(infSize);
+      //# try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
+      int len;
+      while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out len)) == STATUS_INFO_LENGTH_MISMATCH)
+      {
+        Marshal.FreeHGlobal(pSysHndlInf);
+        pSysHndlInf = Marshal.AllocHGlobal(infSize = len + 0x1000);
+      }
 
-              //# at this point duplicating succeeded and thus, sHDup is valid
-              using (SafeRes sHDup = new SafeRes(hDup, SafeRes.ResType.Handle)) {
-                //# compare the duplicated handle with the handle of our shell process
-                //# if they point to the same kernel object, we are going to step out of the loop and return the PID of the WindowsTerminal process
-                if (NativeMethods.CompareObjectHandles(sHDup.Raw, sHShell.Raw) != 0) {
-                  pid = termPid;
-                  break;
-                }
-              }
+      using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer))
+      {
+        if (status < 0) { return 0; }
+        using (SafeRes sHFindOpenProc = new SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, findOpenProcId), SafeRes.ResType.Handle)) //# intentionally after NtQuerySystemInformation() was called to exclude it from the found open handles
+        {
+          if (sHFindOpenProc.IsInvalid) { return 0; }
+          uint foundPid = 0, curPid = 0;
+          IntPtr hThis = NativeMethods.GetCurrentProcess(), hCur = IntPtr.Zero;
+          int sysHndlSize = Marshal.SizeOf(typeof(SystemHandle));
+          //# iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
+          //# the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
+          for (IntPtr pSysHndl = (IntPtr)((long)sPSysHndlInf.Raw + IntPtr.Size), pEnd = (IntPtr)((long)pSysHndl + Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize);
+               pSysHndl != pEnd;
+               pSysHndl = (IntPtr)((long)pSysHndl + sysHndlSize)) {
+            //# get one SYSTEM_HANDLE at a time
+            SystemHandle sysHndl = (SystemHandle)Marshal.PtrToStructure(pSysHndl, typeof(SystemHandle));
+            //# shortcut; OB_TYPE_INDEX_JOB is the identifier we are looking for, any other SYSTEM_HANDLE object is immediately ignored at this point
+            if (sysHndl.ObjTypeId != OB_TYPE_INDEX_JOB) { continue; }
+            //# every time the process changes, the previous handle needs to be closed and we open a new handle to the current process
+            if (curPid != sysHndl.ProcId) {
+              curPid = sysHndl.ProcId;
+              if (hCur != IntPtr.Zero && NativeMethods.CloseHandle(hCur) != 0) { hCur = IntPtr.Zero; }
+              hCur = NativeMethods.OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION, 0, curPid);
             }
 
-            return pid;
+            //# if the process has not been opened, or
+            //# if duplicating the current one of its open handles fails, continue with the next SYSTEM_HANDLE object
+            //# the duplicated handle is necessary to get information about the object (e.g. the process) it points to
+            IntPtr hCurOpenDup;
+            if (hCur == IntPtr.Zero ||
+                NativeMethods.DuplicateHandle(hCur, (IntPtr)sysHndl.Handle, hThis, out hCurOpenDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) == 0) {
+              continue;
+            }
+
+            using (SafeRes sHCurOpenDup = new SafeRes(hCurOpenDup, SafeRes.ResType.Handle)) {
+              if (NativeMethods.CompareObjectHandles(sHCurOpenDup.Raw, sHFindOpenProc.Raw) != 0 && //# both the handle of the open process and the currently duplicated handle must refer to the same kernel object
+                  searchProcName == GetProcBaseName(hCur)) { //# the process name of the currently found process must meet the process name we are looking for
+                foundPid = curPid;
+                break;
+              }
+            }
           }
+
+          if (hCur != IntPtr.Zero && NativeMethods.CloseHandle(hCur) == 0) { return 0; }
+          return foundPid;
         }
       }
     }
@@ -188,13 +208,9 @@ Add-Type @'
       //# The assumption that the terminal is the parent process of the Shell process
       //# is gone with DefTerm (the Default Windows Terminal).
       //# Thus, I don't care about using more undocumented stuff:
-      //# Get the process IDs of all WindowsTerminal processes and try to figure out
-      //# which of them has a handle to the Shell process open.
-      foreach (Process termProc in Process.GetProcessesByName("WindowsTerminal")) {
-        uint termPid = FindWTCallback(shellPid, (uint)termProc.Id);
-        if (termPid != 0) { return termProc; }
-      }
-
+      //# Try to figure out which of WindowsTerminal processes has a handle to the Shell process open.
+      uint termPid = GetPidOfNamedProcWithOpenProcHandle("WindowsTerminal", shellPid);
+      if (termPid != 0) { return Process.GetProcessById((int)termPid); }
       return null;
     }
 
