@@ -36,6 +36,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define WIN32_LEAN_AND_MEAN 1
 #include <Windows.h>
 #include <stddef.h>
+#include <stdint.h>
 
 // Get the process ID of the terminal connected to the current console application.
 // Only Windows Terminal and Conhost are supported.
@@ -86,7 +87,7 @@ int main(void)
     return 1;
 
   const HWND termWnd = GetTermWnd(termPid);
-  wprintf(L"Term proc: %s\nTerm PID:  %lu\nTerm HWND: %08zX\n", GetTermBaseName(termPid), termPid, (UINT_PTR)(void *)termWnd);
+  wprintf(L"Term proc: %s\nTerm PID:  %lu\nTerm HWND: %08zX\n", GetTermBaseName(termPid), termPid, (intptr_t)(void *)termWnd);
 
   Fade(termWnd, FadeOut);
   Fade(termWnd, FadeIn);
@@ -99,7 +100,6 @@ int main(void)
 
 #include <SubAuth.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <wchar.h>
 
 #ifdef NDEBUG

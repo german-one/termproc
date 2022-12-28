@@ -33,6 +33,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #undef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN 1
 #include <Windows.h>
+#include <cstdint>
 #include <string>
 
 #if defined(NDEBUG) && defined(__clang__)
@@ -141,7 +142,6 @@ int main()
 
 #include <SubAuth.h>
 #include <array>
-#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <span>
