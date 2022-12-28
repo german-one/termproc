@@ -87,7 +87,7 @@ int main(void)
     return 1;
 
   const HWND termWnd = GetTermWnd(termPid);
-  wprintf(L"Term proc: %s\nTerm PID:  %lu\nTerm HWND: %08zX\n", GetTermBaseName(termPid), termPid, (intptr_t)(void *)termWnd);
+  wprintf(L"Term proc: %s\nTerm PID:  %lu\nTerm HWND: %08IX\n", GetTermBaseName(termPid), termPid, (intptr_t)(void *)termWnd);
 
   Fade(termWnd, FadeOut);
   Fade(termWnd, FadeIn);
@@ -132,7 +132,7 @@ static wchar_t *GetProcBaseName(const HANDLE hProc)
     return baseBuf;
 
   wchar_t nameBuf[1024] = { 0 };
-  DWORD size = 1024;
+  DWORD size = ARRAYSIZE(nameBuf);
   if (QueryFullProcessImageNameW(hProc, 0, nameBuf, &size))
     _wsplitpath_s(nameBuf, NULL, 0, NULL, 0, baseBuf, MAX_PATH, NULL, 0);
 
