@@ -115,7 +115,7 @@ Add-Type @'
 
     //# Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
     //# Return the ID of the process that opened the handle if its name is the same as searchProcName,
-    //# Return 0 if no such process is not found.
+    //# Return 0 if no such process is found.
     static uint GetPidOfNamedProcWithOpenProcHandle(string searchProcName, uint findOpenProcId) {
       const int PROCESS_DUP_HANDLE = 0x0040, //# access right to duplicate handles
                 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000, //# access right to retrieve certain process information

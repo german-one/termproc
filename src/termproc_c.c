@@ -152,7 +152,7 @@ typedef struct
 
 // Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
 // Return the ID of the process that opened the handle if its name is the same as searchProcName,
-// Return 0 if no such process is not found.
+// Return 0 if no such process is found.
 static DWORD GetPidOfNamedProcWithOpenProcHandle(const wchar_t *const searchProcName, const DWORD findOpenProcId)
 {
   typedef NTSTATUS(__stdcall * NtQuerySystemInformation_t)(int SysInfClass, PVOID SysInf, DWORD SysInfLen, PDWORD RetLen);

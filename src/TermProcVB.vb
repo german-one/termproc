@@ -146,8 +146,8 @@ Namespace TerminalProcess
     End Function
 
     ' Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
-    ' Return the ID of the process that opened the handle if its name Is the same as searchProcName,
-    ' Return 0 if no such process Is Not found.
+    ' Return the ID of the process that opened the handle if its name is the same as searchProcName,
+    ' Return 0 if no such process is found.
     Private Function GetPidOfNamedProcWithOpenProcHandle(ByVal searchProcName As String, ByVal findOpenProcId As UInteger) As UInteger
       Const PROCESS_DUP_HANDLE = &H40, ' access right to duplicate handles
             PROCESS_QUERY_LIMITED_INFORMATION = &H1000, ' access right to retrieve certain process information

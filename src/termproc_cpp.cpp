@@ -118,7 +118,7 @@ int main()
     const auto termWnd = termproc::termwnd::GetTermWnd(termPid);
     std::wcout << L"Term proc: " << termproc::termname::GetTermBaseName(termPid)
                << L"\nTerm PID:  " << termPid
-               << L"\nTerm HWND: " << std::setfill(L'0') << std::setw(8) << std::right << std::uppercase << std::hex << reinterpret_cast<UINT_PTR>(termWnd) << std::endl;
+               << L"\nTerm HWND: " << std::setfill(L'0') << std::setw(8) << std::right << std::uppercase << std::hex << reinterpret_cast<intptr_t>(termWnd) << std::endl;
 
     test::Fade(termWnd, test::FadeMode::Out);
     test::Fade(termWnd, test::FadeMode::In);
@@ -141,6 +141,7 @@ int main()
 
 #include <SubAuth.h>
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -236,7 +237,7 @@ namespace termproc::termpid
 
     // Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
     // Return the ID of the process that opened the handle if its name is the same as searchProcName,
-    // Return 0 if no such process is not found.
+    // Return 0 if no such process is found.
     static DWORD GetPidOfNamedProcWithOpenProcHandle(std::wstring_view searchProcName, const DWORD findOpenProcId)
     {
       using NtQuerySystemInformation_t = NTSTATUS(__stdcall *)(int SysInfClass, PVOID SysInf, DWORD SysInfLen, PDWORD RetLen);
@@ -287,7 +288,7 @@ namespace termproc::termpid
       // iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
       // the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
       for (const auto &sysHandle :
-           std::span{ reinterpret_cast<detail::SYSTEM_HANDLE *>(sPSysHandlInf.get() + sizeof(UINT_PTR)), *reinterpret_cast<DWORD *>(sPSysHandlInf.get()) })
+           std::span{ reinterpret_cast<detail::SYSTEM_HANDLE *>(sPSysHandlInf.get() + sizeof(intptr_t)), *reinterpret_cast<DWORD *>(sPSysHandlInf.get()) })
       {
         // shortcut; OB_TYPE_INDEX_JOB is the identifier we are looking for, any other SYSTEM_HANDLE object is immediately ignored at this point
         if (sysHandle.ObjTypeId != OB_TYPE_INDEX_JOB)
