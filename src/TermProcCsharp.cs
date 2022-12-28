@@ -141,14 +141,14 @@ namespace TerminalProcess
         return "";
       }
 
-      int capacity = 1024;
-      StringBuilder nameBuf = new StringBuilder(capacity);
-      if (NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, ref capacity) == 0)
+      int size = 1024;
+      StringBuilder nameBuf = new StringBuilder(size);
+      if (NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, ref size) == 0)
       {
         return "";
       }
 
-      return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, capacity));
+      return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size));
     }
 
     // Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.

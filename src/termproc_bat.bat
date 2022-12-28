@@ -95,10 +95,10 @@ set TermPid=^
 %=======% }^
 %=======% private static string GetProcBaseName(IntPtr hProc) {^
 %=========% if (hProc == IntPtr.Zero) { return \"\"; }^
-%=========% int capacity = 1024;^
-%=========% StringBuilder nameBuf = new StringBuilder(capacity);^
-%=========% if (NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, ref capacity) == 0) { return \"\"; }^
-%=========% return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, capacity));^
+%=========% int size = 1024;^
+%=========% StringBuilder nameBuf = new StringBuilder(size);^
+%=========% if (NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, ref size) == 0) { return \"\"; }^
+%=========% return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size));^
 %=======% }^
 %=======% static uint GetPidOfNamedProcWithOpenProcHandle(string searchProcName, uint findOpenProcId) {^
 %=========% const int PROCESS_DUP_HANDLE = 0x0040,^

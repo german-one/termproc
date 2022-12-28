@@ -140,9 +140,9 @@ Namespace TerminalProcess
 
     Private Function GetProcBaseName(ByVal hProc As IntPtr) As String
       If hProc = IntPtr.Zero Then Return ""
-      Dim capacity = 1024, nameBuf = New StringBuilder(capacity)
-      If NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, capacity) = 0 Then Return ""
-      Return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, capacity))
+      Dim size = 1024, nameBuf = New StringBuilder(size)
+      If NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, size) = 0 Then Return ""
+      Return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size))
     End Function
 
     ' Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
