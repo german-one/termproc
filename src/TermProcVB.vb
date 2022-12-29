@@ -80,20 +80,17 @@ Namespace TerminalProcess
       End Enum
 
       Private _raw As System.IntPtr = IntPtr.Zero
-      Private ReadOnly resourceType As ResType = ResType.MemoryPointer
+      Private ReadOnly _resourceType As ResType = ResType.MemoryPointer
 
-      Friend Property Raw As IntPtr
+      Friend ReadOnly Property Raw As IntPtr
         Get
           Return _raw
         End Get
-        Private Set(ByVal value As IntPtr)
-          _raw = value
-        End Set
       End Property
 
       Friend ReadOnly Property IsInvalid As Boolean
         Get
-          Return Raw = IntPtr.Zero OrElse Raw = New IntPtr(-1)
+          Return _raw = IntPtr.Zero OrElse _raw = New IntPtr(-1)
         End Get
       End Property
 
@@ -101,8 +98,8 @@ Namespace TerminalProcess
       ' the resource must be either a pointer received from Marshal.AllocHGlobal() (specify resourceType ResType.MemoryPointer),
       ' or a handle (specify resourceType ResType.Handle)
       Friend Sub New(ByVal raw As IntPtr, ByVal resourceType As ResType)
-        Me.Raw = raw
-        Me.resourceType = resourceType
+        _raw = raw
+        _resourceType = resourceType
       End Sub
 
       Protected Overrides Sub Finalize()
@@ -117,18 +114,18 @@ Namespace TerminalProcess
       Protected Overridable Sub Dispose(ByVal disposing As Boolean)
         If IsInvalid Then Exit Sub
 
-        If resourceType = ResType.MemoryPointer Then
-          Marshal.FreeHGlobal(Raw)
-          Raw = IntPtr.Zero
+        If _resourceType = ResType.MemoryPointer Then
+          Marshal.FreeHGlobal(_raw)
+          _raw = IntPtr.Zero
           Exit Sub
         End If
 
-        If NativeMethods.CloseHandle(Raw) <> 0 Then Raw = New IntPtr(-1)
+        If NativeMethods.CloseHandle(_raw) <> 0 Then _raw = New IntPtr(-1)
       End Sub
 
       Friend Overridable Sub Reset(ByVal raw As IntPtr)
         Dispose()
-        Me.Raw = raw
+        _raw = raw
       End Sub
     End Class
 
