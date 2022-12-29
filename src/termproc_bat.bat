@@ -100,10 +100,9 @@ set TermPid=^
 %=======% private static string GetProcBaseName(SafeRes sHProc) {^
 %=========% int size = 1024;^
 %=========% StringBuilder nameBuf = new StringBuilder(size);^
-%=========% if (NativeMethods.QueryFullProcessImageNameW(sHProc.Raw, 0, nameBuf, ref size) == 0) { return \"\"; }^
-%=========% return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size));^
+%=========% return NativeMethods.QueryFullProcessImageNameW(sHProc.Raw, 0, nameBuf, ref size) == 0 ? \"\" : Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size));^
 %=======% }^
-%=======% static uint GetPidOfNamedProcWithOpenProcHandle(string searchProcName, uint findOpenProcId) {^
+%=======% private static uint GetPidOfNamedProcWithOpenProcHandle(string searchProcName, uint findOpenProcId) {^
 %=========% const int PROCESS_DUP_HANDLE = 0x0040,^
 %===================% PROCESS_QUERY_LIMITED_INFORMATION = 0x1000,^
 %===================% STATUS_INFO_LENGTH_MISMATCH = -1073741820,^
@@ -163,8 +162,7 @@ set TermPid=^
 %===========% return Process.GetProcessById((int)shellPid);^
 %=========% }^
 %=========% uint termPid = GetPidOfNamedProcWithOpenProcHandle(\"WindowsTerminal\", shellPid);^
-%=========% if ((termPid == 0) == false) { return Process.GetProcessById((int)termPid); }^
-%=========% return null;^
+%=========% return termPid == 0 ? null : Process.GetProcessById((int)termPid);^
 %=======% }^
 %=======% private static readonly Process termProc = GetTermProc();^
 %=======% public static Process TermProc { get { return termProc; } }^

@@ -144,18 +144,15 @@ namespace TerminalProcess
     {
       int size = 1024;
       StringBuilder nameBuf = new StringBuilder(size);
-      if (NativeMethods.QueryFullProcessImageNameW(sHProc.Raw, 0, nameBuf, ref size) == 0)
-      {
-        return "";
-      }
-
-      return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size));
+      return NativeMethods.QueryFullProcessImageNameW(sHProc.Raw, 0, nameBuf, ref size) == 0
+        ? ""
+        : Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size));
     }
 
     // Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
     // Return the ID of the process that opened the handle if its name is the same as searchProcName,
     // Return 0 if no such process is found.
-    static uint GetPidOfNamedProcWithOpenProcHandle(string searchProcName, uint findOpenProcId)
+    private static uint GetPidOfNamedProcWithOpenProcHandle(string searchProcName, uint findOpenProcId)
     {
       const int PROCESS_DUP_HANDLE = 0x0040, // access right to duplicate handles
                 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000, // access right to retrieve certain process information
@@ -271,12 +268,7 @@ namespace TerminalProcess
       // Thus, I don't care about using more undocumented stuff:
       // Try to figure out which of WindowsTerminal processes has a handle to the Shell process open.
       uint termPid = GetPidOfNamedProcWithOpenProcHandle("WindowsTerminal", shellPid);
-      if (termPid != 0)
-      {
-        return Process.GetProcessById((int)termPid);
-      }
-
-      return null;
+      return termPid == 0 ? null : Process.GetProcessById((int)termPid);
     }
 
     // Get the process of the terminal connected to the current console application.
