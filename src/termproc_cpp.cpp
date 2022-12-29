@@ -112,11 +112,11 @@ int main()
 {
   try
   {
-    const auto termPid = termproc::termpid::GetTermPid();
+    const auto termPid{ termproc::termpid::GetTermPid() };
     if (!termPid)
       return 1;
 
-    const auto termWnd = termproc::termwnd::GetTermWnd(termPid);
+    const auto termWnd{ termproc::termwnd::GetTermWnd(termPid) };
     std::wcout << L"Term proc: " << termproc::termname::GetTermBaseName(termPid)
                << L"\nTerm PID:  " << termPid
                << L"\nTerm HWND: " << std::setfill(L'0') << std::setw(8) << std::right << std::uppercase << std::hex << reinterpret_cast<intptr_t>(termWnd) << std::endl;
@@ -355,7 +355,7 @@ namespace termproc::termwnd
     using _wnd_callback_dat_t = std::pair<const DWORD, HWND>;
     static BOOL __stdcall GetTermWndCallback(HWND hWnd, LPARAM lParam) noexcept
     {
-      const auto pSearchDat = reinterpret_cast<_wnd_callback_dat_t *>(lParam);
+      const auto pSearchDat{ reinterpret_cast<_wnd_callback_dat_t *>(lParam) };
       DWORD pid{};
       ::GetWindowThreadProcessId(hWnd, &pid);
       if (pid != pSearchDat->first || !::IsWindowVisible(hWnd) || ::GetWindow(hWnd, GW_OWNER))
