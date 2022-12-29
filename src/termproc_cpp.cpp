@@ -210,7 +210,7 @@ namespace termproc::termname
     if (!::QueryFullProcessImageNameW(hProc, 0, nameBuf.data(), &size))
       return {};
 
-    return std::filesystem::path{ nameBuf.data() }.stem().wstring();
+    return std::filesystem::path{ { nameBuf.data(), size } }.stem().wstring();
   }
 
   std::wstring GetTermBaseName(const DWORD termPid)
@@ -247,8 +247,8 @@ namespace termproc::termpid
       static constexpr auto SystemHandleInformation{ 16 }; // one of the SYSTEM_INFORMATION_CLASS values
       static constexpr BYTE OB_TYPE_INDEX_JOB{ 7 }; // one of the SYSTEM_HANDLE.ObjTypeId values
 
-      NtQuerySystemInformation_t NtQuerySystemInformation;
-      CompareObjectHandles_t CompareObjectHandles;
+      NtQuerySystemInformation_t NtQuerySystemInformation{};
+      CompareObjectHandles_t CompareObjectHandles{};
 
       HMODULE hModule{ ::GetModuleHandleA("ntdll.dll") };
       if (!hModule || !(NtQuerySystemInformation = reinterpret_cast<NtQuerySystemInformation_t>(::GetProcAddress(hModule, "NtQuerySystemInformation"))))
@@ -301,7 +301,7 @@ namespace termproc::termpid
           sHCur.reset(::OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, curPid));
         }
 
-        HANDLE hCurOpenDup;
+        HANDLE hCurOpenDup{};
         // if the process has not been opened, or
         // if duplicating the current one of its open handles fails, continue with the next SYSTEM_HANDLE object
         // the duplicated handle is necessary to get information about the object (e.g. the process) it points to
