@@ -120,6 +120,12 @@ namespace TerminalProcess
           Raw = new IntPtr(-1);
         }
       }
+
+      internal virtual void Reset(IntPtr raw)
+      {
+        Dispose();
+        Raw = raw;
+      }
     }
 
     // undocumented SYSTEM_HANDLE structure, SYSTEM_HANDLE_TABLE_ENTRY_INFO might be the actual name
@@ -134,16 +140,16 @@ namespace TerminalProcess
       internal readonly uint Acc;
     }
 
-    private static string GetProcBaseName(IntPtr hProc)
+    private static string GetProcBaseName(SafeRes sHProc)
     {
-      if (hProc == IntPtr.Zero)
+      if (sHProc.IsInvalid)
       {
         return "";
       }
 
       int size = 1024;
       StringBuilder nameBuf = new StringBuilder(size);
-      if (NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, ref size) == 0)
+      if (NativeMethods.QueryFullProcessImageNameW(sHProc.Raw, 0, nameBuf, ref size) == 0)
       {
         return "";
       }
@@ -190,55 +196,47 @@ namespace TerminalProcess
           uint foundPid = 0;
           uint curPid = 0;
           IntPtr hThis = NativeMethods.GetCurrentProcess();
-          IntPtr hCur = IntPtr.Zero;
           int sysHndlSize = Marshal.SizeOf(typeof(SystemHandle));
-          // iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
-          // the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
-          for (IntPtr pSysHndl = sPSysHndlInf.Raw + IntPtr.Size, pEnd = pSysHndl + (Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize); pSysHndl != pEnd; pSysHndl += sysHndlSize)
+          using (SafeRes sHCur = new SafeRes(IntPtr.Zero, SafeRes.ResType.Handle))
           {
-            // get one SYSTEM_HANDLE at a time
-            SystemHandle sysHndl = (SystemHandle)Marshal.PtrToStructure(pSysHndl, typeof(SystemHandle));
-            // shortcut; OB_TYPE_INDEX_JOB is the identifier we are looking for, any other SYSTEM_HANDLE object is immediately ignored at this point
-            if (sysHndl.ObjTypeId != OB_TYPE_INDEX_JOB)
+            // iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
+            // the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
+            for (IntPtr pSysHndl = sPSysHndlInf.Raw + IntPtr.Size, pEnd = pSysHndl + (Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize); pSysHndl != pEnd; pSysHndl += sysHndlSize)
             {
-              continue;
-            }
-
-            // every time the process changes, the previous handle needs to be closed and we open a new handle to the current process
-            if (curPid != sysHndl.ProcId)
-            {
-              curPid = sysHndl.ProcId;
-              if (hCur != IntPtr.Zero && NativeMethods.CloseHandle(hCur) != 0)
+              // get one SYSTEM_HANDLE at a time
+              SystemHandle sysHndl = (SystemHandle)Marshal.PtrToStructure(pSysHndl, typeof(SystemHandle));
+              // shortcut; OB_TYPE_INDEX_JOB is the identifier we are looking for, any other SYSTEM_HANDLE object is immediately ignored at this point
+              if (sysHndl.ObjTypeId != OB_TYPE_INDEX_JOB)
               {
-                hCur = IntPtr.Zero;
+                continue;
               }
 
-              hCur = NativeMethods.OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION, 0, curPid);
-            }
-
-            // if the process has not been opened, or
-            // if duplicating the current one of its open handles fails, continue with the next SYSTEM_HANDLE object
-            // the duplicated handle is necessary to get information about the object (e.g. the process) it points to
-            if (hCur == IntPtr.Zero ||
-                NativeMethods.DuplicateHandle(hCur, (IntPtr)sysHndl.Handle, hThis, out IntPtr hCurOpenDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) == 0)
-            {
-              continue;
-            }
-
-            using (SafeRes sHCurOpenDup = new SafeRes(hCurOpenDup, SafeRes.ResType.Handle))
-            {
-              if (NativeMethods.CompareObjectHandles(sHCurOpenDup.Raw, sHFindOpenProc.Raw) != 0 && // both the handle of the open process and the currently duplicated handle must refer to the same kernel object
-                  searchProcName == GetProcBaseName(hCur)) // the process name of the currently found process must meet the process name we are looking for
+              // every time the process changes, the previous handle needs to be closed and we open a new handle to the current process
+              if (curPid != sysHndl.ProcId)
               {
-                foundPid = curPid;
-                break;
+                curPid = sysHndl.ProcId;
+                sHCur.Reset(NativeMethods.OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION, 0, curPid));
+              }
+
+              // if the process has not been opened, or
+              // if duplicating the current one of its open handles fails, continue with the next SYSTEM_HANDLE object
+              // the duplicated handle is necessary to get information about the object (e.g. the process) it points to
+              if (sHCur.IsInvalid ||
+                  NativeMethods.DuplicateHandle(sHCur.Raw, (IntPtr)sysHndl.Handle, hThis, out IntPtr hCurOpenDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) == 0)
+              {
+                continue;
+              }
+
+              using (SafeRes sHCurOpenDup = new SafeRes(hCurOpenDup, SafeRes.ResType.Handle))
+              {
+                if (NativeMethods.CompareObjectHandles(sHCurOpenDup.Raw, sHFindOpenProc.Raw) != 0 && // both the handle of the open process and the currently duplicated handle must refer to the same kernel object
+                    searchProcName == GetProcBaseName(sHCur)) // the process name of the currently found process must meet the process name we are looking for
+                {
+                  foundPid = curPid;
+                  break;
+                }
               }
             }
-          }
-
-          if (hCur != IntPtr.Zero && NativeMethods.CloseHandle(hCur) == 0)
-          {
-            return 0;
           }
 
           return foundPid;

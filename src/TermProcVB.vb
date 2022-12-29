@@ -125,6 +125,11 @@ Namespace TerminalProcess
 
         If NativeMethods.CloseHandle(Raw) <> 0 Then Raw = New IntPtr(-1)
       End Sub
+
+      Friend Overridable Sub Reset(ByVal raw As IntPtr)
+        Dispose()
+        Me.Raw = raw
+      End Sub
     End Class
 
     ' undocumented SYSTEM_HANDLE structure, SYSTEM_HANDLE_TABLE_ENTRY_INFO might be the actual name
@@ -138,10 +143,10 @@ Namespace TerminalProcess
       Friend ReadOnly Acc As UInteger
     End Structure
 
-    Private Function GetProcBaseName(ByVal hProc As IntPtr) As String
-      If hProc = IntPtr.Zero Then Return ""
+    Private Function GetProcBaseName(ByRef sHProc As SafeRes) As String
+      If sHProc.IsInvalid Then Return ""
       Dim size = 1024, nameBuf = New StringBuilder(size)
-      If NativeMethods.QueryFullProcessImageNameW(hProc, 0, nameBuf, size) = 0 Then Return ""
+      If NativeMethods.QueryFullProcessImageNameW(sHProc.Raw, 0, nameBuf, size) = 0 Then Return ""
       Return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size))
     End Function
 
@@ -173,48 +178,47 @@ Namespace TerminalProcess
           If sHFindOpenProc.IsInvalid Then Return 0
           Dim foundPid As UInteger = 0, curPid As UInteger = 0
           Dim hThis = NativeMethods.GetCurrentProcess()
-          Dim hCur = IntPtr.Zero
           Dim sysHndlSize = Marshal.SizeOf(GetType(SystemHandle))
-          ' iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
-          ' the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
-          Dim pSysHndl = sPSysHndlInf.Raw + IntPtr.Size, pEnd = pSysHndl + (Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize)
-          While pSysHndl <> pEnd
-            ' get one SYSTEM_HANDLE at a time
-            Dim sysHndl = DirectCast(Marshal.PtrToStructure(pSysHndl, GetType(SystemHandle)), SystemHandle)
-            ' shortcut; OB_TYPE_INDEX_JOB is the identifier we are looking for, any other SYSTEM_HANDLE object is immediately ignored at this point
-            If sysHndl.ObjTypeId <> OB_TYPE_INDEX_JOB Then
-              pSysHndl += sysHndlSize
-              Continue While
-            End If
-
-            ' every time the process changes, the previous handle needs to be closed and we open a new handle to the current process
-            If curPid <> sysHndl.ProcId Then
-              curPid = sysHndl.ProcId
-              If hCur <> IntPtr.Zero AndAlso NativeMethods.CloseHandle(hCur) <> 0 Then hCur = IntPtr.Zero
-              hCur = NativeMethods.OpenProcess(PROCESS_DUP_HANDLE Or PROCESS_QUERY_LIMITED_INFORMATION, 0, curPid)
-            End If
-
-            ' if the process has not been opened, or
-            ' if duplicating the current one of its open handles fails, continue with the next SYSTEM_HANDLE object
-            ' the duplicated handle is necessary to get information about the object (e.g. the process) it points to
-            Dim hCurOpenDup = IntPtr.Zero
-            If hCur = IntPtr.Zero OrElse NativeMethods.DuplicateHandle(hCur, CType(sysHndl.Handle, IntPtr), hThis, hCurOpenDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) = 0 Then
-              pSysHndl += sysHndlSize
-              Continue While
-            End If
-
-            Using sHCurOpenDup As New SafeRes(hCurOpenDup, SafeRes.ResType.Handle)
-              If NativeMethods.CompareObjectHandles(sHCurOpenDup.Raw, sHFindOpenProc.Raw) <> 0 AndAlso _ ' both the handle of the open process and the currently duplicated handle must refer to the same kernel object
-                  searchProcName = GetProcBaseName(hCur) Then ' the process name of the currently found process must meet the process name we are looking for
-                foundPid = curPid
-                Exit While
+          Using sHCur As New SafeRes(IntPtr.Zero, SafeRes.ResType.Handle)
+            ' iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
+            ' the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
+            Dim pSysHndl = sPSysHndlInf.Raw + IntPtr.Size, pEnd = pSysHndl + (Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize)
+            While pSysHndl <> pEnd
+              ' get one SYSTEM_HANDLE at a time
+              Dim sysHndl = DirectCast(Marshal.PtrToStructure(pSysHndl, GetType(SystemHandle)), SystemHandle)
+              ' shortcut; OB_TYPE_INDEX_JOB is the identifier we are looking for, any other SYSTEM_HANDLE object is immediately ignored at this point
+              If sysHndl.ObjTypeId <> OB_TYPE_INDEX_JOB Then
+                pSysHndl += sysHndlSize
+                Continue While
               End If
-            End Using
 
-            pSysHndl += sysHndlSize
-          End While
+              ' every time the process changes, the previous handle needs to be closed and we open a new handle to the current process
+              If curPid <> sysHndl.ProcId Then
+                curPid = sysHndl.ProcId
+                sHCur.Reset(NativeMethods.OpenProcess(PROCESS_DUP_HANDLE Or PROCESS_QUERY_LIMITED_INFORMATION, 0, curPid))
+              End If
 
-          If hCur <> IntPtr.Zero AndAlso NativeMethods.CloseHandle(hCur) = 0 Then Return 0
+              ' if the process has not been opened, or
+              ' if duplicating the current one of its open handles fails, continue with the next SYSTEM_HANDLE object
+              ' the duplicated handle is necessary to get information about the object (e.g. the process) it points to
+              Dim hCurOpenDup = IntPtr.Zero
+              If sHCur.IsInvalid OrElse NativeMethods.DuplicateHandle(sHCur.Raw, CType(sysHndl.Handle, IntPtr), hThis, hCurOpenDup, PROCESS_QUERY_LIMITED_INFORMATION, 0, 0) = 0 Then
+                pSysHndl += sysHndlSize
+                Continue While
+              End If
+
+              Using sHCurOpenDup As New SafeRes(hCurOpenDup, SafeRes.ResType.Handle)
+                If NativeMethods.CompareObjectHandles(sHCurOpenDup.Raw, sHFindOpenProc.Raw) <> 0 AndAlso _ ' both the handle of the open process and the currently duplicated handle must refer to the same kernel object
+                    searchProcName = GetProcBaseName(sHCur) Then ' the process name of the currently found process must meet the process name we are looking for
+                  foundPid = curPid
+                  Exit While
+                End If
+              End Using
+
+              pSysHndl += sysHndlSize
+            End While
+          End Using
+
           Return foundPid
         End Using
       End Using
