@@ -127,29 +127,23 @@ Add-Type @'
                 SystemHandleInformation = 16; //# one of the SYSTEM_INFORMATION_CLASS values
       const byte OB_TYPE_INDEX_JOB = 7; //# one of the SYSTEM_HANDLE.ObjTypeId values
       int status, //# retrieves the NTSTATUS return value
-          infSize = 0x200000; //# initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
+          infSize = 0x200000, //# initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
+          len;
 
       //# allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
-      IntPtr pSysHndlInf = Marshal.AllocHGlobal(infSize);
-      //# try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
-      int len;
-      while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out len)) == STATUS_INFO_LENGTH_MISMATCH)
-      {
-        Marshal.FreeHGlobal(pSysHndlInf);
-        pSysHndlInf = Marshal.AllocHGlobal(infSize = len + 0x1000);
-      }
+      using (SafeRes sPSysHndlInf = new SafeRes(Marshal.AllocHGlobal(infSize), SafeRes.ResType.MemoryPointer)) {
+        //# try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
+        while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, sPSysHndlInf.Raw, infSize, out len)) == STATUS_INFO_LENGTH_MISMATCH) {
+          sPSysHndlInf.Reset(Marshal.AllocHGlobal(infSize = len + 0x1000));
+        }
 
-      using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer))
-      {
         if (status < 0) { return 0; }
-        using (SafeRes sHFindOpenProc = new SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, findOpenProcId), SafeRes.ResType.Handle)) //# intentionally after NtQuerySystemInformation() was called to exclude it from the found open handles
-        {
+        using (SafeRes sHFindOpenProc = new SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, findOpenProcId), SafeRes.ResType.Handle)) { //# intentionally after NtQuerySystemInformation() was called to exclude it from the found open handles
           if (sHFindOpenProc.IsInvalid) { return 0; }
           uint foundPid = 0, curPid = 0;
           IntPtr hThis = NativeMethods.GetCurrentProcess();
           int sysHndlSize = Marshal.SizeOf(typeof(SystemHandle));
-          using (SafeRes sHCur = new SafeRes(IntPtr.Zero, SafeRes.ResType.Handle))
-          {
+          using (SafeRes sHCur = new SafeRes(IntPtr.Zero, SafeRes.ResType.Handle)) {
             //# iterate over the array of SYSTEM_HANDLE objects, which begins at an offset of pointer size in the SYSTEM_HANDLE_INFORMATION object
             //# the number of SYSTEM_HANDLE objects is specified in the first 32 bits of the SYSTEM_HANDLE_INFORMATION object
             for (IntPtr pSysHndl = (IntPtr)((long)sPSysHndlInf.Raw + IntPtr.Size), pEnd = (IntPtr)((long)pSysHndl + Marshal.ReadInt32(sPSysHndlInf.Raw) * sysHndlSize);

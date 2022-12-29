@@ -163,16 +163,14 @@ namespace TerminalProcess
           infSize = 0x200000; // initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
 
       // allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
-      IntPtr pSysHndlInf = Marshal.AllocHGlobal(infSize);
-      // try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
-      while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out int len)) == STATUS_INFO_LENGTH_MISMATCH)
+      using (SafeRes sPSysHndlInf = new SafeRes(Marshal.AllocHGlobal(infSize), SafeRes.ResType.MemoryPointer))
       {
-        Marshal.FreeHGlobal(pSysHndlInf);
-        pSysHndlInf = Marshal.AllocHGlobal(infSize = len + 0x1000);
-      }
+        // try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
+        while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, sPSysHndlInf.Raw, infSize, out int len)) == STATUS_INFO_LENGTH_MISMATCH)
+        {
+          sPSysHndlInf.Reset(Marshal.AllocHGlobal(infSize = len + 0x1000));
+        }
 
-      using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer))
-      {
         if (status < 0)
         {
           return 0;

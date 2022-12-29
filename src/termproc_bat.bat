@@ -108,19 +108,13 @@ set TermPid=^
 %===================% STATUS_INFO_LENGTH_MISMATCH = -1073741820,^
 %===================% SystemHandleInformation = 16;^
 %=========% const byte OB_TYPE_INDEX_JOB = 7;^
-%=========% int status, infSize = 0x200000;^
-%=========% IntPtr pSysHndlInf = Marshal.AllocHGlobal(infSize);^
-%=========% int len;^
-%=========% while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, out len)) == STATUS_INFO_LENGTH_MISMATCH)^
-%=========% {^
-%===========% Marshal.FreeHGlobal(pSysHndlInf);^
-%===========% pSysHndlInf = Marshal.AllocHGlobal(infSize = len + 0x1000);^
-%=========% }^
-%=========% using (SafeRes sPSysHndlInf = new SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer))^
-%=========% {^
+%=========% int status, infSize = 0x200000, len;^
+%=========% using (SafeRes sPSysHndlInf = new SafeRes(Marshal.AllocHGlobal(infSize), SafeRes.ResType.MemoryPointer)) {^
+%===========% while ((status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, sPSysHndlInf.Raw, infSize, out len)) == STATUS_INFO_LENGTH_MISMATCH) {^
+%=============% sPSysHndlInf.Reset(Marshal.AllocHGlobal(infSize = len + 0x1000));^
+%===========% }^
 %===========% if (status ^^^< 0) { return 0; }^
-%===========% using (SafeRes sHFindOpenProc = new SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, findOpenProcId), SafeRes.ResType.Handle))^
-%===========% {^
+%===========% using (SafeRes sHFindOpenProc = new SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, findOpenProcId), SafeRes.ResType.Handle)) {^
 %=============% if (sHFindOpenProc.IsInvalid) { return 0; }^
 %=============% uint foundPid = 0, curPid = 0;^
 %=============% IntPtr hThis = NativeMethods.GetCurrentProcess();^

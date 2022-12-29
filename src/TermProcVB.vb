@@ -159,18 +159,17 @@ Namespace TerminalProcess
             SystemHandleInformation = 16, ' one of the SYSTEM_INFORMATION_CLASS values
             OB_TYPE_INDEX_JOB As Byte = 7 ' one of the SYSTEM_HANDLE.ObjTypeId values
       Dim status As Integer, ' retrieves the NTSTATUS return value
-          infSize = &H200000 ' initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
+          infSize = &H200000, ' initially allocated memory size for the SYSTEM_HANDLE_INFORMATION object
+          len = 0
       ' allocate some memory representing an undocumented SYSTEM_HANDLE_INFORMATION object, which can't be meaningfully declared in C# code
-      Dim pSysHndlInf = Marshal.AllocHGlobal(infSize), len = 0
-      Do ' try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
-        status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, pSysHndlInf, infSize, len)
-        If status <> STATUS_INFO_LENGTH_MISMATCH Then Exit Do
-        Marshal.FreeHGlobal(pSysHndlInf)
-        infSize = len + &H1000
-        pSysHndlInf = Marshal.AllocHGlobal(infSize)
-      Loop
+      Using sPSysHndlInf As New SafeRes(Marshal.AllocHGlobal(infSize), SafeRes.ResType.MemoryPointer)
+        Do ' try to get an array of all available SYSTEM_HANDLE objects, allocate more memory if necessary
+          status = NativeMethods.NtQuerySystemInformation(SystemHandleInformation, sPSysHndlInf.Raw, infSize, len)
+          If status <> STATUS_INFO_LENGTH_MISMATCH Then Exit Do
+          infSize = len + &H1000
+          sPSysHndlInf.Reset(Marshal.AllocHGlobal(infSize))
+        Loop
 
-      Using sPSysHndlInf As New SafeRes(pSysHndlInf, SafeRes.ResType.MemoryPointer)
         If status < 0 Then Return 0
 
         Using sHFindOpenProc As New SafeRes(NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, findOpenProcId), SafeRes.ResType.Handle) ' intentionally after NtQuerySystemInformation() was called to exclude it from the found open handles
