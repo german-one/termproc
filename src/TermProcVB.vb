@@ -144,7 +144,6 @@ Namespace TerminalProcess
     End Structure
 
     Private Function GetProcBaseName(ByRef sHProc As SafeRes) As String
-      If sHProc.IsInvalid Then Return ""
       Dim size = 1024, nameBuf = New StringBuilder(size)
       If NativeMethods.QueryFullProcessImageNameW(sHProc.Raw, 0, nameBuf, size) = 0 Then Return ""
       Return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size))

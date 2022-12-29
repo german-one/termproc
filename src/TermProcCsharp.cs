@@ -142,11 +142,6 @@ namespace TerminalProcess
 
     private static string GetProcBaseName(SafeRes sHProc)
     {
-      if (sHProc.IsInvalid)
-      {
-        return "";
-      }
-
       int size = 1024;
       StringBuilder nameBuf = new StringBuilder(size);
       if (NativeMethods.QueryFullProcessImageNameW(sHProc.Raw, 0, nameBuf, ref size) == 0)
