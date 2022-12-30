@@ -203,11 +203,8 @@ namespace termproc
   static std::wstring GetProcBaseName(const HANDLE hProc)
   {
     std::array<wchar_t, 1024> nameBuf{};
-    auto size{ static_cast<DWORD>(nameBuf.size()) };
-    if (!::QueryFullProcessImageNameW(hProc, 0, nameBuf.data(), &size))
-      return {};
-
-    return std::filesystem::path{ { nameBuf.data(), size } }.stem().wstring();
+    auto size{ static_cast<DWORD>(nameBuf.size()) };    
+    return ::QueryFullProcessImageNameW(hProc, 0, nameBuf.data(), &size) ? std::filesystem::path{ { nameBuf.data(), size } }.stem().wstring() : std::wstring{};
   }
 }
 
@@ -328,24 +325,14 @@ namespace termproc::termpid
     // https://github.com/microsoft/terminal/issues/7434
     // We're getting around this assuming we don't get an icon handle from the
     // invisible Conhost window when the Shell is connected to Windows Terminal.
-    if (::SendMessageW(conWnd, WM_GETICON, 0, 0))
-    {
-      // Conhost assumed: The Shell process' main window is the console window.
-      // (weird because the Shell has no own window, but it has always been like this)
-      return (termPid = shellPid);
-    }
-
-    return (termPid = detail::GetPidOfNamedProcWithOpenProcHandle(L"WindowsTerminal", shellPid));
+    return (termPid = ::SendMessageW(conWnd, WM_GETICON, 0, 0) ? shellPid : detail::GetPidOfNamedProcWithOpenProcHandle(L"WindowsTerminal", shellPid));
   }
 }
 
 std::wstring termproc::termname::GetTermBaseName(const DWORD termPid)
 {
   const auto sHTerm{ saferes::MakeHandle(termPid ? ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid) : nullptr) };
-  if (saferes::IsInvalidHandle(sHTerm))
-    return {};
-
-  return termproc::GetProcBaseName(sHTerm.get());
+  return saferes::IsInvalidHandle(sHTerm) ? std::wstring{} : termproc::GetProcBaseName(sHTerm.get());
 }
 
 namespace termproc::termwnd

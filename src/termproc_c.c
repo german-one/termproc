@@ -264,14 +264,7 @@ DWORD GetTermPid(void)
   // https://github.com/microsoft/terminal/issues/7434
   // We're getting around this assuming we don't get an icon handle from the
   // invisible Conhost window when the Shell is connected to Windows Terminal.
-  if (SendMessageW(conWnd, WM_GETICON, 0, 0))
-  {
-    // Conhost assumed: The Shell process' main window is the console window.
-    // (weird because the Shell has no own window, but it has always been like this)
-    return (termPid = shellPid);
-  }
-
-  return (termPid = GetPidOfNamedProcWithOpenProcHandle(L"WindowsTerminal", shellPid));
+  return (termPid = SendMessageW(conWnd, WM_GETICON, 0, 0) ? shellPid : GetPidOfNamedProcWithOpenProcHandle(L"WindowsTerminal", shellPid));
 }
 
 wchar_t *GetTermBaseName(const DWORD termPid)
