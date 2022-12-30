@@ -198,25 +198,16 @@ namespace saferes
   constexpr inline auto MakeGlobMem{ [](BYTE *const ptr = nullptr) noexcept { return detail::_loclmem_t{ ptr, detail::GlobMemDeleter }; } };
 }
 
-namespace termproc::termname
+namespace termproc
 {
   static std::wstring GetProcBaseName(const HANDLE hProc)
   {
-    if (!hProc)
-      return {};
-
     std::array<wchar_t, 1024> nameBuf{};
     auto size{ static_cast<DWORD>(nameBuf.size()) };
     if (!::QueryFullProcessImageNameW(hProc, 0, nameBuf.data(), &size))
       return {};
 
     return std::filesystem::path{ { nameBuf.data(), size } }.stem().wstring();
-  }
-
-  std::wstring GetTermBaseName(const DWORD termPid)
-  {
-    const auto sHTerm{ saferes::MakeHandle(termPid ? ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid) : nullptr) };
-    return GetProcBaseName(sHTerm.get());
   }
 }
 
@@ -311,7 +302,7 @@ namespace termproc::termpid
 
         const auto sHCurOpenDup{ saferes::MakeHandle(hCurOpenDup) };
         if (CompareObjectHandles(sHCurOpenDup.get(), sHFindOpenProc.get()) && // both the handle of the open process and the currently duplicated handle must refer to the same kernel object
-            searchProcName == termproc::termname::GetProcBaseName(sHCur.get())) // the process name of the currently found process must meet the process name we are looking for
+            searchProcName == termproc::GetProcBaseName(sHCur.get())) // the process name of the currently found process must meet the process name we are looking for
           return curPid;
       }
 
@@ -346,6 +337,15 @@ namespace termproc::termpid
 
     return (termPid = detail::GetPidOfNamedProcWithOpenProcHandle(L"WindowsTerminal", shellPid));
   }
+}
+
+std::wstring termproc::termname::GetTermBaseName(const DWORD termPid)
+{
+  const auto sHTerm{ saferes::MakeHandle(termPid ? ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, termPid) : nullptr) };
+  if (saferes::IsInvalidHandle(sHTerm))
+    return {};
+
+  return termproc::GetProcBaseName(sHTerm.get());
 }
 
 namespace termproc::termwnd
