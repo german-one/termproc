@@ -16,6 +16,19 @@ The source files are transcriptions of pretty much the same core code in differe
 
 <br>
 
+### **Relevant code:**  
+
+| **File** | **Code of interest** | **Value of interest** |
+| :--- | :--- | :--- |
+| `*.bat` | *`TermPid`* macro defined in the `:init_TermPid` routine | the errorlevel returned by the *`TermPid`* macro is the PID of the hosting terminal (`0` if an error occurred) |
+| `*.c` | *`GetTermPid`* function, along with structure `SYSTEM_HANDLE` and functions `GetProcBaseName`, `GetPidOfNamedProcWithOpenProcHandle` | the value returned by the *`GetTermPid`* function is the PID of the hosting terminal (`0` if an error occurred) |
+| `*.cpp` | everything in namespace *`termpid`*, along with namespace `saferes` and the `GetProcBaseName` function | the value returned by the *`GetTermPid`* function is the PID of the hosting terminal (`0` if an error occurred) |
+| `*.cs` | class *`WinTerm`* | the value of property *`WinTerm.TermProc`* refers to the hosting terminal process (`null` or exception if an error occurred) |
+| `*.ps1` | Type referencing class *`WinTerm`* | the value of property *`[WinTerm]::TermProc`* refers to the hosting terminal process (`$null` or exception if an error occurred) |
+| `*.vb` | Module *`WinTerm`* | the value of property *`WinTerm.TermProc`* refers to the hosting terminal process (`Nothing` or exception if an error occurred) |
+
+<br>
+
 ### **Background:**  
 A few years ago Microsoft began to develop a new terminal application - [Windows Terminal](https://github.com/microsoft/terminal). The installation is available for Windows 10, and Windows 11 already ships with it. By an update in October '22 Microsoft turned it into the default terminal app on Windows 11.  
 As of now, Windows Terminal coexists with the good old Conhost. Users are able to choose which is taken as their default terminal app.  
