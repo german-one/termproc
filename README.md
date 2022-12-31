@@ -18,6 +18,8 @@ The source files are transcriptions of pretty much the same core code in differe
 
 ### **Relevant code:**  
 
+The source files in this repository contain fully functional code that demonstrates how to use the search procedure. However, if you intend to use it in your own code, it might be useful to know which essential pieces of code you need to include.  
+
 | **File** | **Code of interest** | **Value of interest** |
 | :--- | :--- | :--- |
 | `*.bat` | *`TermPid`* macro defined in the `:init_TermPid` routine | the errorlevel returned by the *`TermPid`* macro is the PID of the hosting terminal (`0` or PowerShell exception if an error occurred) |
