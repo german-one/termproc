@@ -5,6 +5,8 @@ The source files are transcriptions of pretty much the same core code in differe
 <br>
 ### **Minimum requirements to compile/run the code:**  
 
+Source files in `Windows Batch`, `C`, `C++`, `C#.Net`, `PowerShell`, and `VB.Net` are published in the [src](./src) folder. They all depend on Windows being the target operating system. Other specific dependencies are listed below.  
+
 | **File** | **Requirement** |
 | :--- | :--- |
 | `*.bat` | *Windows PowerShell 2* |
@@ -47,6 +49,7 @@ In each file is also a piece of unrelated code that fades the window out and in 
 <br>
 
 ### **Search procedure:**  
+This is a brief explanation of how searching is implemented in the source codes.  
 1. Determine the handle to the console window.  
 2. Try to get its icon.  
    - If we got a valid handle then our application is running in a Conhost window, and we return the PID of the process for which the window has been created. (The Windows API is special-cased to handle the hosted process as owner of the window rather than the Conhost process itself.)  
