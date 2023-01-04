@@ -126,8 +126,7 @@ Namespace TerminalProcess
 
     Private Function GetProcBaseName(ByRef sHProc As SafeRes) As String
       Dim size = 1024, nameBuf = New StringBuilder(size)
-      If NativeMethods.QueryFullProcessImageNameW(sHProc.Raw, 0, nameBuf, size) = 0 Then Return ""
-      Return Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size))
+      Return If(NativeMethods.QueryFullProcessImageNameW(sHProc.Raw, 0, nameBuf, size) = 0, "", Path.GetFileNameWithoutExtension(nameBuf.ToString(0, size)))
     End Function
 
     ' Enumerate the opened handles in each process, select those that refer to the same process as findOpenProcId.
@@ -231,9 +230,7 @@ Namespace TerminalProcess
       ' Thus, I don't care about using more undocumented stuff:
       ' Try to figure out which of WindowsTerminal processes has a handle to the Shell process open.
       Dim termPid = GetPidOfNamedProcWithOpenProcHandle("WindowsTerminal", shellPid)
-      If termPid <> 0 Then Return Process.GetProcessById(CInt(termPid))
-
-      Return Nothing
+      Return If(termPid = 0, Nothing, Process.GetProcessById(CInt(termPid)))
     End Function
 
     ' Get the process of the terminal connected to the current console application.
