@@ -1,3 +1,6 @@
+:: Copyright (c) Steffen Illhardt
+:: Licensed under the MIT license.
+
 @echo off &setlocal
 
 call :init_TermPid
