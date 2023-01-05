@@ -28,7 +28,7 @@ The source files in this repository contain fully functional code that demonstra
 | `*.c` | *`GetTermPid`* function, along with structure `SYSTEM_HANDLE` and functions `GetProcBaseName`, `GetPidOfNamedProcWithOpenProcHandle` | the value returned by the *`GetTermPid`* function is the PID of the hosting terminal (`0` if an error occurred) |
 | `*.cpp` | everything in namespace *`termpid`*, along with namespace `saferes` and the `GetProcBaseName` function | the value returned by the *`GetTermPid`* function is the PID of the hosting terminal (`0` or exception if an error occurred) |
 | `*.cs` | class *`WinTerm`* | the value of property *`WinTerm.TermProc`* refers to the hosting terminal process (`null` or exception if an error occurred) |
-| `*.ps1` | Type referencing class *`WinTerm`* | the value of property *`[WinTerm]::TermProc`* refers to the hosting terminal process (`$null` or type not defined if an error occurred) |
+| `*.ps1` | Type referencing class *`WinTerm`* | the value of property *`[WinTerm]::TermProc`* refers to the hosting terminal process (`$null` or type `WinTerm` not defined if an error occurred) |
 | `*.vb` | Module *`WinTerm`* | the value of property *`WinTerm.TermProc`* refers to the hosting terminal process (`Nothing` or exception if an error occurred) |
 
 <br>
