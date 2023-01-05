@@ -3,7 +3,7 @@
 
 # min. req.: PowerShell v.2
 
-Add-Type @'
+try { Add-Type -EA SilentlyContinue -TypeDefinition @'
   using System;
   using System.Diagnostics;
   using System.IO;
@@ -202,7 +202,7 @@ Add-Type @'
     //#  If the function fails, null will be returned.
     public static Process TermProc { get { return termProc; } }
   }
-'@
+'@ } catch {}
 
 Add-Type @'
   using System;
@@ -249,8 +249,7 @@ Add-Type @'
   }
 '@
 
-
-$termProc = [WinTerm]::TermProc
+$termProc = if ('WinTerm' -as [type]) { [WinTerm]::TermProc }
 if ($termProc) {
   "Term proc: $($termProc.ProcessName)"
   "Term PID:  $($termProc.Id)"

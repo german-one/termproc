@@ -5,7 +5,9 @@
 
 call :init_TermPid
 %TermPid%
+if not errorlevel 1 goto :eof
 set "pid=%errorlevel%"
+
 echo Term PID:  %pid%
 
 call :init_Fade
@@ -32,7 +34,7 @@ for %%i in ("pwsh.exe") do if "%%~$PATH:i"=="" (set "ps=powershell") else set "p
 ::    echo PID: %errorlevel%
 set TermPid=^
 %=% %ps%.exe -nop -ep Bypass -c ^"^
-%===% Add-Type '^
+%===% try { Add-Type -EA SilentlyContinue -TypeDefinition '^
 %=====% using System;^
 %=====% using System.Diagnostics;^
 %=====% using System.IO;^
@@ -164,8 +166,8 @@ set TermPid=^
 %=======% private static readonly Process termProc = GetTermProc();^
 %=======% public static Process TermProc { get { return termProc; } }^
 %=====% }^
-%===% ';^
-%===% $termProc = [WinTerm]::TermProc;^
+%===% ' } catch {};^
+%===% $termProc = if ('WinTerm' -as [type]) { [WinTerm]::TermProc };^
 %===% exit $(if ($termProc) { $termProc.Id } else { 0 });^
 %=% ^"
 
