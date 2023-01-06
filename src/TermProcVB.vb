@@ -7,6 +7,7 @@ Option Explicit On
 Option Infer On
 Option Strict On
 
+Imports System.Diagnostics.CodeAnalysis
 Imports System.Globalization
 Imports System.IO
 Imports System.Runtime.ConstrainedExecution
@@ -19,6 +20,8 @@ Namespace TerminalProcess
   Public Module WinTerm
     ' imports the used Windows API functions
     Private NotInheritable Class NativeMethods
+      Private Sub New()
+      End Sub
       <DllImport("kernel32.dll")>
       Friend Shared Function CloseHandle(ByVal Hndl As IntPtr) As Integer
       End Function
@@ -243,7 +246,14 @@ Namespace TerminalProcess
   End Module
 
   Friend Class Program
+#If Not DEBUG AndAlso CODE_ANALYSIS Then
+#Disable Warning IDE0079
+    <SuppressMessage("Microsoft.Globalization", "CA1303:DoNotPassLiteralsAsLocalizedParameters")> ' WriteLine()
     Public Shared Function Main() As Integer
+#Enable Warning IDE0079
+#Else
+    Public Shared Function Main() As Integer
+#End If
       Try
         Console.WriteLine("Term proc: {0}" & vbLf & "Term PID:  {1}" & vbLf & "Term HWND: {2}",
                           TermProc.ProcessName,
@@ -270,6 +280,8 @@ Namespace Test
   ' provides the .Fade() method for fading out or fading in a window, used to prove that we found the right terminal process
   Public Module Fader
     Private NotInheritable Class NativeMethods
+      Private Sub New()
+      End Sub
       <DllImport("user32.dll")>
       Friend Shared Function GetWindowLongW(ByVal wnd As IntPtr, ByVal idx As Integer) As Integer
       End Function
