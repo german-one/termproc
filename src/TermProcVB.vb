@@ -138,7 +138,7 @@ Namespace TerminalProcess
     Private Function GetPidOfNamedProcWithOpenProcHandle(ByVal searchProcName As String, ByVal findOpenProcId As UInteger) As UInteger
       Const PROCESS_DUP_HANDLE = &H40, ' access right to duplicate handles
             PROCESS_QUERY_LIMITED_INFORMATION = &H1000, ' access right to retrieve certain process information
-            STATUS_INFO_LENGTH_MISMATCH = -1073741820, ' NTSTATUS returned if we still didn't allocate enough memory
+            STATUS_INFO_LENGTH_MISMATCH = &HC0000004%, ' NTSTATUS returned if we still didn't allocate enough memory
             SystemHandleInformation = 16, ' one of the SYSTEM_INFORMATION_CLASS values
             OB_TYPE_INDEX_JOB As Byte = 7 ' one of the SYSTEM_HANDLE.ObjTypeId values
       Dim status As Integer, ' retrieves the NTSTATUS return value

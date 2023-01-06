@@ -138,7 +138,7 @@ namespace TerminalProcess
     {
       const int PROCESS_DUP_HANDLE = 0x0040, // access right to duplicate handles
                 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000, // access right to retrieve certain process information
-                STATUS_INFO_LENGTH_MISMATCH = -1073741820, // NTSTATUS returned if we still didn't allocate enough memory
+                STATUS_INFO_LENGTH_MISMATCH = unchecked((int)0xc0000004), // NTSTATUS returned if we still didn't allocate enough memory
                 SystemHandleInformation = 16; // one of the SYSTEM_INFORMATION_CLASS values
       const byte OB_TYPE_INDEX_JOB = 7; // one of the SYSTEM_HANDLE.ObjTypeId values
       int status, // retrieves the NTSTATUS return value

@@ -110,7 +110,7 @@ set TermPid=^
 %=======% private static uint GetPidOfNamedProcWithOpenProcHandle(string searchProcName, uint findOpenProcId) {^
 %=========% const int PROCESS_DUP_HANDLE = 0x0040,^
 %===================% PROCESS_QUERY_LIMITED_INFORMATION = 0x1000,^
-%===================% STATUS_INFO_LENGTH_MISMATCH = -1073741820,^
+%===================% STATUS_INFO_LENGTH_MISMATCH = unchecked((int)0xc0000004),^
 %===================% SystemHandleInformation = 16;^
 %=========% const byte OB_TYPE_INDEX_JOB = 7;^
 %=========% int status, infSize = 0x200000, len;^
