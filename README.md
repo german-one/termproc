@@ -1,3 +1,14 @@
+<hr>
+<hr>
+
+🔴 <span style="color:red">**IMPORTANT**</span>❗🔴  
+## <span style="color:red">**This code is obsolete!**</span>  
+The new process model of Windows Terminal version 1.18 requires a different approach.  
+**Refer to https://github.com/german-one/termwnd for the new implementation.**  
+
+<hr>
+<hr>
+
 ## **TermProc**  
 
 The purpose of the code in this repository is both to distinguish between Conhost and Windows Terminal processes and to determine which terminal instance is connected to the current console process. Third-party terminal apps are not supported.  
